@@ -1,6 +1,7 @@
 # Logs
 logs
 *.log
+codex-session-*.md
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
