@@ -127,6 +127,66 @@
   background-color: rgba(var(--semi-grey-0), 1);
 }
 
+.login-page {
+  color: var(--semi-color-text-0);
+  background-color: var(--semi-color-bg-0);
+}
+
+.login-card {
+  color: var(--semi-color-text-0);
+  background-color: var(--semi-color-bg-2);
+  border: 1px solid var(--semi-color-border);
+  box-shadow: 0 12px 32px var(--semi-color-shadow);
+}
+
+.login-hint {
+  color: var(--semi-color-text-2);
+}
+
+.login-link {
+  color: var(--semi-color-link);
+}
+
+.login-link:hover {
+  color: var(--semi-color-link-hover);
+  text-decoration: underline;
+}
+
+.login-link:focus-visible {
+  outline: 2px solid var(--semi-color-focus-border);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+.login-input.semi-input-wrapper {
+  background-color: var(--semi-color-bg-0);
+  border: 1px solid var(--semi-color-border);
+}
+
+.login-input.semi-input-wrapper:hover {
+  background-color: var(--semi-color-bg-1);
+  border-color: var(--semi-color-border);
+}
+
+.login-input.semi-input-wrapper.semi-input-wrapper-focus,
+.login-input.semi-input-wrapper.semi-input-wrapper-focus:hover {
+  background-color: var(--semi-color-bg-0);
+  border-color: var(--semi-color-focus-border);
+}
+
+.login-error {
+  color: var(--semi-color-text-0);
+}
+
+.login-logo {
+  border-radius: var(--semi-border-radius-medium);
+}
+
+[theme-mode="dark"] .login-logo {
+  padding: 4px;
+  background-color: var(--semi-color-white);
+}
+
 .toolbar-theme {
   background-color: rgba(var(--semi-grey-1), 0.7);
 }

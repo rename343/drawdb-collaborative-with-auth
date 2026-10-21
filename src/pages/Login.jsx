@@ -44,7 +44,7 @@ export default function Login({ mode = "login" }) {
 
   if (status === AUTH_STATUS.LOADING || setupRequired === null) {
     return (
-      <div className="h-screen flex items-center justify-center">
+      <div className="login-page h-screen flex items-center justify-center">
         <Spin size="large" />
       </div>
     );
@@ -82,14 +82,14 @@ export default function Login({ mode = "login" }) {
   };
 
   return (
-    <div className="h-screen flex items-center justify-center bg-zinc-100 dark:bg-zinc-900 px-4">
-      <div className="w-full max-w-sm rounded-2xl bg-white dark:bg-zinc-800 p-8 shadow-xs">
+    <div className="login-page h-screen flex items-center justify-center px-4">
+      <div className="login-card w-full max-w-sm rounded-2xl p-8">
         <div className="flex flex-col items-center mb-6">
-          <img src={icon} width={48} alt="drawDB" />
+          <img src={icon} width={48} alt="drawDB" className="login-logo" />
           <h1 className="text-xl font-semibold mt-3">
             {t(isRegister ? "create_admin_account" : "sign_in")}
           </h1>
-          <p className="text-sm text-zinc-500 mt-1 text-center">
+          <p className="login-hint text-sm mt-1 text-center">
             {t(isRegister ? "create_admin_subtitle" : "sign_in_subtitle")}
           </p>
         </div>
@@ -98,7 +98,7 @@ export default function Login({ mode = "login" }) {
           <Banner
             type="danger"
             closeIcon={null}
-            description={error}
+            description={<span className="login-error">{error}</span>}
             className="mb-4"
           />
         )}
@@ -115,9 +115,9 @@ export default function Login({ mode = "login" }) {
                 value={bootstrapSecret}
                 onChange={setBootstrapSecret}
                 autoComplete="off"
-                className="mt-1"
+                className="login-input mt-1"
               />
-              <div className="text-xs text-zinc-500 mt-1">
+              <div className="login-hint text-xs mt-1">
                 {t("bootstrap_secret_hint")}
               </div>
             </div>
@@ -133,10 +133,10 @@ export default function Login({ mode = "login" }) {
               onChange={setUsername}
               autoComplete="username"
               autoFocus
-              className="mt-1"
+              className="login-input mt-1"
             />
             {isRegister && (
-              <div className="text-xs text-zinc-500 mt-1">
+              <div className="login-hint text-xs mt-1">
                 {t("username_rules")}
               </div>
             )}
@@ -152,10 +152,10 @@ export default function Login({ mode = "login" }) {
               value={password}
               onChange={setPassword}
               autoComplete={isRegister ? "new-password" : "current-password"}
-              className="mt-1"
+              className="login-input mt-1"
             />
             {isRegister && (
-              <div className="text-xs text-zinc-500 mt-1">
+              <div className="login-hint text-xs mt-1">
                 {t("password_rules")}
               </div>
             )}
@@ -172,7 +172,7 @@ export default function Login({ mode = "login" }) {
                 value={confirmation}
                 onChange={setConfirmation}
                 autoComplete="new-password"
-                className="mt-1"
+                className="login-input mt-1"
               />
             </div>
           )}
@@ -191,14 +191,14 @@ export default function Login({ mode = "login" }) {
           </Button>
         </form>
 
-        <div className="text-sm text-center mt-5 text-zinc-500">
+        <div className="login-hint text-sm text-center mt-5">
           {isRegister && (
             <>
               {t("have_account")}{" "}
               <Link
                 to="/login"
                 state={location.state}
-                className="text-sky-700 hover:underline"
+                className="login-link font-medium"
               >
                 {t("sign_in")}
               </Link>
@@ -209,7 +209,7 @@ export default function Login({ mode = "login" }) {
               <Link
                 to="/register"
                 state={location.state}
-                className="text-sky-700 hover:underline"
+                className="login-link font-medium"
               >
                 {t("set_up_instance")}
               </Link>
