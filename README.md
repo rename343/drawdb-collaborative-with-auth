@@ -360,5 +360,6 @@ the repository history for changes made by this fork.
 ## Upstream project
 
 - Original source: [drawdb-io/drawdb](https://github.com/drawdb-io/drawdb)
+- Forked source: [artempas/drawdb-collaborative-with-auth](https://github.com/artempas/drawdb-collaborative-with-auth)
 - Original project website: [drawdb.app](https://drawdb.app/)
 - Upstream community: [Discord](https://discord.gg/BrjZgNrmR6)
