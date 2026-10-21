@@ -6,6 +6,13 @@ transcripts) are linked, never copied.
 
 Last updated: 2026-10-21.
 
+## Implementation status
+
+- M1 login theme + share button: implemented on `feat/m1-login-share` in
+  `15e8422` and `757c760`; automated and headless-browser checks recorded in
+  [Verification](testing/verification.md). A normal-browser clipboard smoke test
+  remains.
+
 ## Decisions
 
 - [2026-10-21 — scope and sequencing](decisions/2026-10-21-scope.md) — M1/M2/M3

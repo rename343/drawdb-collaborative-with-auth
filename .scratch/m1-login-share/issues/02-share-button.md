@@ -1,6 +1,6 @@
 # 02 — Share button copies the canonical diagram link
 
-Status: ready-for-agent
+Status: resolved
 Blocked by: none
 
 ## Tasks
@@ -21,3 +21,12 @@ Blocked by: none
 - Works from `/editor/diagrams/:id` and `/diagrams/:id`.
 - The copied URL opens the same diagram in another signed-in browser.
 - No server or access-model changes.
+
+## Comments
+
+2026-10-21 — Implemented in `757c760` as `ShareButton.jsx`. The pure URL helper
+is covered by four Node tests. Headless Chrome verified the enabled state on a
+saved diagram, the disabled state and tooltip on `/editor` and templates, the
+clipboard-failure fallback with “Select link”, and a second account opening the
+canonical URL. The real clipboard success path still needs a normal-browser
+smoke test.

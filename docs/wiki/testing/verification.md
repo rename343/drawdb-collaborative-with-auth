@@ -46,3 +46,35 @@ There is no browser test harness at this commit. UI checks are manual.
 - App dark + OS light.
 - App dark + OS dark.
 - Error banner visible; labels and hints readable; mobile width.
+
+## M1 verification record — 2026-10-21
+
+Commits: `15e8422` (login theme), `757c760` (share button).
+
+Automated:
+
+- `npm run test:share` — 4/4 pass.
+- `npm run lint` — clean.
+- `npm run build` — success, only pre-existing Vite warnings.
+- `npm run test:server` — 17/17 pass.
+- `npm run test:git` — 7/7 pass.
+- `npm run test:import` — 2/2 pass.
+- `npm run test:layout` — 28/28 pass.
+
+Headless Chrome (local dev server, 2026-10-21):
+
+- Login screenshots: app light/dark × OS light/dark; light page stayed light
+  under `--force-dark-mode`; dark page matched in both OS modes.
+- Mobile 390×844: light and dark render without clipping.
+- Dark invalid-credentials banner is readable.
+- Share enabled on `/diagrams/:id`; disabled on `/editor` and
+  `/editor/templates/:id`; disabled tooltips show the correct reason.
+- Headless clipboard denied, so the fallback modal appeared with the canonical
+  URL and a working “Select link” action.
+- A second account opened the canonical `/diagrams/:id` URL and saw the same
+  diagram.
+
+Remaining human smoke test:
+
+- Real clipboard success path in a normal browser.
+- Full login redirect after a logged-out user opens a share link.
