@@ -248,8 +248,14 @@ const en = {
     didnt_find_diagram: "Oops! Didn't find the diagram.",
     unsigned: "Unsigned",
     share: "Share",
+    share_save_first: "Save the diagram before sharing it.",
+    share_templates_unavailable:
+      "Templates can't be shared. Save a copy of the diagram first.",
     unshare: "Unshare",
     copy_link: "Copy link",
+    copy_link_failed:
+      "Couldn't copy the link automatically. Copy it manually below.",
+    select_link: "Select link",
     readme: "README",
     failed_to_load: "Failed to load. Make sure the link is correct.",
     share_info:

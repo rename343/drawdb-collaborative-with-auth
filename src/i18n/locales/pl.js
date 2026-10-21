@@ -239,7 +239,13 @@ const pl = {
     didnt_find_diagram: "Ups! Nie znaleziono diagramu.",
     unsigned: "Bez znaku",
     share: "Udostępnij",
+    share_save_first: "Zapisz diagram, aby móc go udostępnić.",
+    share_templates_unavailable:
+      "Szablonów nie można udostępniać. Najpierw zapisz kopię diagramu.",
     copy_link: "Kopiuj link",
+    copy_link_failed:
+      "Nie udało się automatycznie skopiować linku. Skopiuj go ręcznie poniżej.",
+    select_link: "Zaznacz link",
     readme: "README",
     failed_to_load:
       "Nie udało się załadować. Upewnij się, że link jest poprawny.",

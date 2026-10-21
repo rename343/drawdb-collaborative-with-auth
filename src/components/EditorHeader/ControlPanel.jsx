@@ -94,6 +94,7 @@ import { DateTime } from "luxon";
 import ConfigureCustomTypes from "./ConfigureCustomTypes";
 import { useDiagramList } from "./Modal/Open/hooks/useDiagramList";
 import { mergeDiagrams, sortDiagrams } from "./Modal/Open/diagram";
+import ShareButton from "./ShareButton";
 
 export default function ControlPanel({
   title,
@@ -1796,6 +1797,7 @@ export default function ControlPanel({
             {header()}
             <div className="flex items-center gap-2 me-7">
               <Slot name="header-actions-start" />
+              <ShareButton diagramId={diagramId} isTemplate={isTemplate} />
               <Slot name="header-actions-end" />
               <AdminButton />
               <UserMenu />

@@ -13,6 +13,7 @@
     "test:git": "node --test server/git.test.js",
     "test:import": "node --test src/utils/importSQL/normalize.test.js",
     "test:layout": "node --test src/utils/autoLayout/autoLayout.test.js",
+    "test:share": "node --test src/utils/share.test.js",
     "build": "vite build && node scripts/precompress.mjs",
     "lint": "eslint . --ext js,jsx --report-unused-disable-directives --max-warnings 0",
     "preview": "vite preview"
