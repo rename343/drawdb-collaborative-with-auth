@@ -339,6 +339,9 @@ const en = {
     username: "Username",
     password: "Password",
     confirm_password: "Confirm password",
+    bootstrap_secret: "Bootstrap secret",
+    bootstrap_secret_hint:
+      "Enter the one-time secret configured by the instance administrator.",
     sign_in_subtitle: "Sign in to open and share your diagrams.",
     create_admin_account: "Create the administrator account",
     create_admin_subtitle:

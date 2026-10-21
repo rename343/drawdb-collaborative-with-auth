@@ -20,7 +20,7 @@ import { createGitSyncService, defaultGitRoot } from "./gitSync.js";
 import { DIAGRAM_ID_PATTERN, isPlainObject } from "./protocol.js";
 import { attachCollaborationServer } from "./websocket.js";
 
-/* global process */
+/* global Buffer, process */
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MAX_DOCUMENT_BYTES = "2mb";
@@ -99,20 +99,88 @@ function setAssetHeaders(res, filePath) {
   }
 }
 
-export function createApplication({ databasePath, staticPath } = {}) {
+function normalizedOrigin(value, { production }) {
+  if (!value) {
+    if (production) throw new Error("APP_ORIGIN must be set in production");
+    return undefined;
+  }
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error("APP_ORIGIN must be an absolute HTTP(S) origin");
+  }
+  if (
+    !["http:", "https:"].includes(parsed.protocol) ||
+    parsed.origin !== value ||
+    parsed.username ||
+    parsed.password
+  ) {
+    throw new Error("APP_ORIGIN must contain only the public HTTP(S) origin");
+  }
+  if (production && parsed.protocol !== "https:") {
+    throw new Error("APP_ORIGIN must use HTTPS in production");
+  }
+  return parsed.origin;
+}
+
+function matchesBootstrapSecret(received, expected) {
+  if (typeof received !== "string" || typeof expected !== "string")
+    return false;
+  const receivedBytes = Buffer.from(received);
+  const expectedBytes = Buffer.from(expected);
+  return (
+    expectedBytes.length > 0 &&
+    receivedBytes.length === expectedBytes.length &&
+    crypto.timingSafeEqual(receivedBytes, expectedBytes)
+  );
+}
+
+export function createApplication({
+  databasePath,
+  staticPath,
+  bootstrapSecret = process.env.BOOTSTRAP_SECRET,
+  appOrigin = process.env.APP_ORIGIN,
+} = {}) {
+  const allowedOrigin = normalizedOrigin(appOrigin, {
+    production: process.env.NODE_ENV === "production",
+  });
   const database = openDatabase(databasePath);
   const store = createDiagramStore(database);
   const auth = createAuthStore(database);
+  const gitController = new AbortController();
   const gitSync = createGitSyncService({
     db: database,
     store,
     rootDir: defaultGitRoot(databasePath),
+    signal: gitController.signal,
   });
+  let stopping = false;
+  const pendingHandlers = new Set();
+  const asyncRoute = (handler) => (req, res, next) => {
+    const task = Promise.resolve().then(() => handler(req, res, next));
+    pendingHandlers.add(task);
+    task.then(
+      () => pendingHandlers.delete(task),
+      (error) => {
+        pendingHandlers.delete(task);
+        next(error);
+      },
+    );
+  };
   const loginThrottle = createLoginThrottle();
   const app = express();
   app.disable("x-powered-by");
   app.set("trust proxy", 1);
   app.use(express.json({ limit: MAX_DOCUMENT_BYTES }));
+  app.use((_req, res, next) => {
+    if (stopping) {
+      res.setHeader("Connection", "close");
+      res.status(503).json({ error: "The server is shutting down" });
+      return;
+    }
+    next();
+  });
 
   const validId = (req, res, next) => {
     if (!DIAGRAM_ID_PATTERN.test(req.params.id || "")) {
@@ -178,40 +246,53 @@ export function createApplication({ databasePath, staticPath } = {}) {
     res.json({ setupRequired: auth.countUsers() === 0 }),
   );
 
-  app.post("/api/auth/register", async (req, res, next) => {
-    try {
-      if (auth.countUsers() > 0) {
-        res.status(403).json({
-          error: "Registration is closed. Ask an administrator for an account.",
+  app.post(
+    "/api/auth/register",
+    asyncRoute(async (req, res, next) => {
+      try {
+        if (auth.countUsers() > 0) {
+          res.status(403).json({
+            error:
+              "Registration is closed. Ask an administrator for an account.",
+          });
+          return;
+        }
+        if (!credentials(req.body)) {
+          res.status(400).json({ error: CREDENTIALS_ERROR });
+          return;
+        }
+        if (
+          !matchesBootstrapSecret(req.body.bootstrapSecret, bootstrapSecret)
+        ) {
+          res
+            .status(403)
+            .json({ error: "A valid bootstrap secret is required" });
+          return;
+        }
+        const result = await auth.createUser({
+          username: req.body.username,
+          password: req.body.password,
+          isAdmin: true,
+          requireEmpty: true,
         });
-        return;
+        if (result.status === "already_initialized") {
+          res.status(403).json({
+            error:
+              "Registration is closed. Ask an administrator for an account.",
+          });
+          return;
+        }
+        if (result.status === "taken") {
+          res.status(409).json({ error: "Username is already taken" });
+          return;
+        }
+        startSession(req, res, result.user);
+        res.status(201).json({ user: result.user });
+      } catch (error) {
+        next(error);
       }
-      if (!credentials(req.body)) {
-        res.status(400).json({ error: CREDENTIALS_ERROR });
-        return;
-      }
-      const result = await auth.createUser({
-        username: req.body.username,
-        password: req.body.password,
-        isAdmin: true,
-        requireEmpty: true,
-      });
-      if (result.status === "already_initialized") {
-        res.status(403).json({
-          error: "Registration is closed. Ask an administrator for an account.",
-        });
-        return;
-      }
-      if (result.status === "taken") {
-        res.status(409).json({ error: "Username is already taken" });
-        return;
-      }
-      startSession(req, res, result.user);
-      res.status(201).json({ user: result.user });
-    } catch (error) {
-      next(error);
-    }
-  });
+    }),
+  );
 
   app.get("/api/admin/users", requireAuth, requireAdmin, (_req, res) =>
     res.json({ users: auth.listUsers() }),
@@ -221,7 +302,7 @@ export function createApplication({ databasePath, staticPath } = {}) {
     "/api/admin/users",
     requireAuth,
     requireAdmin,
-    async (req, res, next) => {
+    asyncRoute(async (req, res, next) => {
       try {
         if (!credentials(req.body)) {
           res.status(400).json({ error: CREDENTIALS_ERROR });
@@ -241,40 +322,49 @@ export function createApplication({ databasePath, staticPath } = {}) {
       } catch (error) {
         next(error);
       }
-    },
+    }),
   );
 
-  app.post("/api/auth/login", async (req, res, next) => {
-    try {
-      if (!isPlainObject(req.body)) {
-        res.status(400).json({ error: "A username and password are required" });
-        return;
+  app.post(
+    "/api/auth/login",
+    asyncRoute(async (req, res, next) => {
+      try {
+        if (!isPlainObject(req.body)) {
+          res
+            .status(400)
+            .json({ error: "A username and password are required" });
+          return;
+        }
+        const throttleKey = `${req.ip}:${String(req.body.username).toLowerCase()}`;
+        const throttle = loginThrottle.check(throttleKey);
+        if (!throttle.allowed) {
+          res.setHeader("Retry-After", String(throttle.retryAfterSeconds));
+          res
+            .status(429)
+            .json({ error: "Too many attempts. Try again later." });
+          return;
+        }
+        const user = credentials(req.body)
+          ? await auth.verifyCredentials(req.body)
+          : null;
+        if (!user) {
+          loginThrottle.fail(throttleKey);
+          res.status(401).json({ error: "Invalid username or password" });
+          return;
+        }
+        loginThrottle.succeed(throttleKey);
+        startSession(req, res, user);
+        res.json({ user });
+      } catch (error) {
+        next(error);
       }
-      const throttleKey = `${req.ip}:${String(req.body.username).toLowerCase()}`;
-      const throttle = loginThrottle.check(throttleKey);
-      if (!throttle.allowed) {
-        res.setHeader("Retry-After", String(throttle.retryAfterSeconds));
-        res.status(429).json({ error: "Too many attempts. Try again later." });
-        return;
-      }
-      const user = credentials(req.body)
-        ? await auth.verifyCredentials(req.body)
-        : null;
-      if (!user) {
-        loginThrottle.fail(throttleKey);
-        res.status(401).json({ error: "Invalid username or password" });
-        return;
-      }
-      loginThrottle.succeed(throttleKey);
-      startSession(req, res, user);
-      res.json({ user });
-    } catch (error) {
-      next(error);
-    }
-  });
+    }),
+  );
 
   app.post("/api/auth/logout", (req, res) => {
-    auth.deleteSession(parseCookies(req.headers.cookie)[SESSION_COOKIE]);
+    const token = parseCookies(req.headers.cookie)[SESSION_COOKIE];
+    auth.deleteSession(token);
+    websocket.closeSession(token);
     res.setHeader("Set-Cookie", clearedSessionCookie({ secure: req.secure }));
     res.status(204).end();
   });
@@ -368,17 +458,18 @@ export function createApplication({ databasePath, staticPath } = {}) {
     }
     next();
   };
-  const gitRoute = (handler) => async (req, res, next) => {
-    try {
-      await handler(req, res);
-    } catch (error) {
-      if (isGitError(error)) {
-        res.status(error.status).json({ error: error.message });
-        return;
+  const gitRoute = (handler) =>
+    asyncRoute(async (req, res, next) => {
+      try {
+        await handler(req, res);
+      } catch (error) {
+        if (isGitError(error)) {
+          res.status(error.status).json({ error: error.message });
+          return;
+        }
+        next(error);
       }
-      next(error);
-    }
-  };
+    });
   const gitGuards = [requireAuth, validId, withDiagram];
 
   app.get(
@@ -485,7 +576,10 @@ export function createApplication({ databasePath, staticPath } = {}) {
     });
   }
   app.use((error, _req, res, next) => {
-    void next;
+    if (res.headersSent) {
+      next(error);
+      return;
+    }
     console.error("Request failed:", error.message);
     if (error?.type === "entity.too.large") {
       res.status(413).json({ error: "Request body is too large" });
@@ -495,7 +589,9 @@ export function createApplication({ databasePath, staticPath } = {}) {
   });
 
   const server = http.createServer(app);
-  const websocket = attachCollaborationServer(server, store, auth);
+  const websocket = attachCollaborationServer(server, store, auth, {
+    allowedOrigin,
+  });
 
   auth.pruneExpiredSessions();
   const sessionSweep = setInterval(
@@ -505,13 +601,50 @@ export function createApplication({ databasePath, staticPath } = {}) {
   sessionSweep.unref();
   server.on("close", () => clearInterval(sessionSweep));
 
-  return { app, server, websocket, database, store, auth };
+  let shutdownPromise;
+  const shutdown = ({ timeoutMs = 20_000 } = {}) => {
+    if (shutdownPromise) return shutdownPromise;
+    stopping = true;
+    clearInterval(sessionSweep);
+    const httpClosed = new Promise((resolve) => {
+      server.close(() => resolve());
+    });
+    const forceCloseTimer = setTimeout(() => {
+      gitController.abort();
+      server.closeAllConnections?.();
+    }, timeoutMs);
+    forceCloseTimer.unref();
+    shutdownPromise = Promise.all([
+      httpClosed,
+      websocket.shutdown(),
+      Promise.allSettled([...pendingHandlers]),
+    ]).then(() => {
+      clearTimeout(forceCloseTimer);
+      database.close();
+    });
+    return shutdownPromise;
+  };
+
+  return { app, server, websocket, database, store, auth, shutdown };
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const port = Number.parseInt(process.env.PORT || "3000", 10);
-  const { server } = createApplication();
+  const application = createApplication();
+  const { server } = application;
   server.listen(port, "0.0.0.0", () => {
     console.log(`drawDB listening on http://0.0.0.0:${port}`);
   });
+  let stopping = false;
+  const stop = (signal) => {
+    if (stopping) return;
+    stopping = true;
+    console.log(`Received ${signal}; shutting down`);
+    application.shutdown().catch((error) => {
+      console.error("Shutdown failed:", error.message);
+      process.exitCode = 1;
+    });
+  };
+  process.once("SIGTERM", () => stop("SIGTERM"));
+  process.once("SIGINT", () => stop("SIGINT"));
 }

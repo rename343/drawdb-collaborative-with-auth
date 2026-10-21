@@ -10,11 +10,11 @@ export const authApi = {
     });
     return result.user;
   },
-  async register({ username, password }) {
+  async register({ username, password, bootstrapSecret }) {
     const result = await request("/api/auth/register", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({ username, password, bootstrapSecret }),
       skipUnauthorizedEvent: true,
     });
     return result.user;

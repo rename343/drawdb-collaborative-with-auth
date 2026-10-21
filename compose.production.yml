@@ -1,0 +1,65 @@
+services:
+  drawdb:
+    image: ${DRAWDB_IMAGE:?Set DRAWDB_IMAGE}:${DRAWDB_TAG:-production}
+    init: true
+    container_name: drawdb-app
+    restart: unless-stopped
+    stop_grace_period: 30s
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_PATH: /data/drawdb.sqlite
+      APP_ORIGIN: https://${APP_DOMAIN:?Set APP_DOMAIN}
+      BOOTSTRAP_SECRET: ${BOOTSTRAP_SECRET:-}
+      GIT_SECRET_KEY: ${GIT_SECRET_KEY:-}
+    volumes:
+      - ${DATA_DIR:-/srv/drawdb/data}:/data
+      - ${SSH_KEY_DIR:-/etc/drawdb/ssh}:/home/node/.ssh:ro
+    expose:
+      - "3000"
+    networks:
+      - drawdb-internal
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/api/auth/status').then(r=>r.ok?r.json():Promise.reject()).then(x=>{if(typeof x.setupRequired!=='boolean')process.exit(1)}).catch(()=>process.exit(1))"
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "5"
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: drawdb-caddy
+    restart: unless-stopped
+    depends_on:
+      drawdb:
+        condition: service_healthy
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:?Set APP_DOMAIN}
+    ports:
+      - "80:80/tcp"
+      - "443:443/tcp"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ${CADDY_DATA_DIR:-/srv/drawdb/caddy-data}:/data
+      - ${CADDY_CONFIG_DIR:-/srv/drawdb/caddy-config}:/config
+    networks:
+      - drawdb-internal
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "5"
+
+networks:
+  drawdb-internal:
+    driver: bridge

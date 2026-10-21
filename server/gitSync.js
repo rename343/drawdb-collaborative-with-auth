@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   createGitStore,
-  git,
+  git as runGit,
   GitError,
   isMissingRef,
   isPushRejected,
@@ -56,8 +56,9 @@ function commitMessage(value, fallback) {
  * working copy of the configured repository and pushed as an ordinary commit,
  * and the same files can be read back to restore the diagram.
  */
-export function createGitSyncService({ db, store, rootDir }) {
+export function createGitSyncService({ db, store, rootDir, signal }) {
   const settingsStore = createGitStore(db);
+  const git = (args, options) => runGit(args, { ...options, signal });
   const root = rootDir;
   // One repository is one working copy, so overlapping requests for the same
   // diagram are serialized instead of fighting over the index.
@@ -66,14 +67,12 @@ export function createGitSyncService({ db, store, rootDir }) {
   const serialize = (diagramId, task) => {
     const previous = queues.get(diagramId) ?? Promise.resolve();
     const next = previous.then(task, task);
-    queues.set(
-      diagramId,
-      next
-        .catch(() => {})
-        .finally(() => {
-          if (queues.get(diagramId) === next) queues.delete(diagramId);
-        }),
-    );
+    const tail = next
+      .catch(() => {})
+      .finally(() => {
+        if (queues.get(diagramId) === tail) queues.delete(diagramId);
+      });
+    queues.set(diagramId, tail);
     return next;
   };
 

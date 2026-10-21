@@ -1,13 +1,17 @@
 services:
   drawdb:
     build: .
+    init: true
     image: drawdb-collaborative
     restart: unless-stopped
-    ports: 
-      - "3333:3000"
+    ports:
+      - "127.0.0.1:3333:3000"
     environment:
+      NODE_ENV: development
       PORT: 3000
       DATABASE_PATH: /data/drawdb.sqlite
+      APP_ORIGIN: http://localhost:3333
+      BOOTSTRAP_SECRET: ${BOOTSTRAP_SECRET:?Set BOOTSTRAP_SECRET in .env}
     volumes:
       - drawdb-data:/data
 

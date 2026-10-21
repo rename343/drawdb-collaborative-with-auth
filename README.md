@@ -56,12 +56,15 @@ Key additions include:
 git clone https://github.com/yms2772/drawdb-collaborative.git
 cd drawdb-collaborative
 npm install
+export APP_ORIGIN=http://localhost:5173
+export BOOTSTRAP_SECRET="$(openssl rand -hex 32)"
 npm run dev
 ```
 
 This starts both the Vite frontend on port `5173` and the API/WebSocket server
 on port `3000`. Use `npm run dev:client` or `npm run dev:server` when only one
-side is needed.
+side is needed. Use `printf '%s\n' "$BOOTSTRAP_SECRET"` in that same terminal
+to obtain the secret for the administrator registration form.
 
 ### Build
 
@@ -75,12 +78,15 @@ npm run build
 ### Docker Build
 
 ```bash
+openssl rand -hex 32
+# Put the output in the ignored .env file as BOOTSTRAP_SECRET=<value>
 docker compose up --build
 ```
 
-Open `http://localhost:3000`. The single application container serves the
+Open `http://localhost:3333`. The single application container serves the
 frontend, diagram API, WebSocket collaboration endpoint, and SQLite storage.
 The Compose configuration persists the database in the `drawdb-data` volume.
+Registration also requires the value of `BOOTSTRAP_SECRET` from `.env`.
 
 ### Collaborative self-hosting
 
@@ -106,14 +112,15 @@ The application exposes:
 
 Every diagram endpoint and the WebSocket handshake require a signed-in user.
 
-There is no open registration. The first visit to a fresh instance offers
-`/register` once: that first account claims the instance and becomes its
-administrator. From then on `/register` returns `403` and accounts are created
-only by the administrator, through the people icon in the editor toolbar (or
-`POST /api/admin/users`). Accounts created that way are always regular users —
-the administrator role cannot be granted over the API, so an instance has
-exactly one administrator. Upgrading an instance that already had accounts
-promotes its earliest account to administrator.
+There is no open registration. On an empty instance, `/register` asks for the
+one-time `BOOTSTRAP_SECRET` configured by the operator. The first account
+claims the instance and becomes its administrator. Remove the secret from the
+runtime configuration after setup. From then on `/register` returns `403` and
+accounts are created only by the administrator, through the people icon in the
+editor toolbar (or `POST /api/admin/users`). Accounts created that way are
+always regular users — the administrator role cannot be granted over the API,
+so an instance has exactly one administrator. Upgrading an instance that
+already had accounts promotes its earliest account to administrator.
 
 If the administrator account is lost, the recovery path is direct SQL against
 the database, for example
@@ -124,6 +131,11 @@ by an `HttpOnly`, `SameSite=Lax` session cookie that is marked `Secure` when the
 request arrives over HTTPS. Sessions last 30 days and slide forward as they are
 used, so make sure the reverse proxy forwards `X-Forwarded-Proto` (see below)
 for the `Secure` flag to be set correctly.
+
+When `APP_ORIGIN` is configured, WebSocket handshakes require an exact matching
+`Origin`. Production requires an HTTPS `APP_ORIGIN`; WebSockets without
+that header are rejected. Logging out closes WebSockets associated with that
+specific session.
 
 Access follows an owner-plus-link model:
 
@@ -182,8 +194,148 @@ when it is missing.
 
 When running behind a reverse proxy, forward `X-Forwarded-For` and
 `X-Forwarded-Proto`, and allow WebSocket `Upgrade`/`Connection` headers on the
-`/ws` path. The browser derives `ws://` or `wss://` from the current origin, so
-no public hostname or `localhost` value is required in production.
+`/ws` path. The browser derives `ws://` or `wss://` from the current page.
+Set the server's `APP_ORIGIN` to the exact public HTTPS origin; production
+Compose derives it from `APP_DOMAIN`.
+
+### Production VM deployment
+
+The production Compose setup targets **Ubuntu Server 24.04 LTS on x86_64**.
+Point a DNS name at the VM and allow inbound TCP ports 80 and 443 (plus UDP
+443 for HTTP/3). Install Docker Engine, the Compose plugin, and Python 3.12+
+(Ubuntu's `python3` package, used for safe backup extraction), then check
+`docker compose version`. Do not publish the application port 3000: Caddy is
+the only service with host ports, and the app and proxy share an internal
+Compose network. The app can still make outbound Git connections for Git sync.
+
+Clone this repository to `/opt/drawdb` and prepare persistent directories.
+The app image runs as `node` (UID/GID 1000), so `/data` must be writable by
+that user. `/data` contains SQLite and its WAL files as well as Git working
+copies.
+
+```bash
+sudo install -d -m 0700 /etc/drawdb
+sudo install -d -o 1000 -g 1000 -m 0750 /srv/drawdb/data
+sudo install -d -o 1000 -g 1000 -m 0750 /srv/drawdb/caddy-data /srv/drawdb/caddy-config
+sudo install -d -o 1000 -g 1000 -m 0700 /etc/drawdb/ssh
+sudo install -m 0600 /opt/drawdb/.env.production.example /etc/drawdb/production.env
+sudoedit /etc/drawdb/production.env
+sudo chmod 0600 /etc/drawdb/production.env
+```
+
+Set `DRAWDB_IMAGE` to the GHCR image name, `APP_DOMAIN` to the public DNS
+name (without a scheme, path, or trailing slash), and review the host paths.
+Generate `BOOTSTRAP_SECRET` with
+`openssl rand -hex 32`, place it in `/etc/drawdb/production.env`, and keep a
+copy long enough to create the administrator account. This file is outside the
+repository and readable only by root. `GIT_SECRET_KEY` is optional; set it
+only if you want a separately managed encryption key for stored Git tokens.
+
+The VM needs its own revocable GHCR credential with `read:packages` access. It is
+separate from GitHub Actions' `GITHUB_TOKEN`. Log in as root so Docker stores
+the credential in root's Docker configuration, not in the repository, Compose
+or the environment file:
+
+```bash
+sudo install -d -m 0700 /root/.docker
+read -rsp 'GHCR read token: ' GHCR_READ_TOKEN; echo
+printf '%s' "$GHCR_READ_TOKEN" | sudo docker login ghcr.io --username YOUR_GITHUB_USER --password-stdin
+sudo chmod 0600 /root/.docker/config.json
+unset GHCR_READ_TOKEN
+```
+
+Rotate it by running `sudo docker logout ghcr.io` and logging in with a newly
+issued read-only token. Keep the token out of command arguments and shell
+history.
+
+Install and start the systemd updater:
+
+```bash
+sudo chmod 0755 /opt/drawdb/deploy/*.sh
+sudo install -m 0644 /opt/drawdb/deploy/drawdb.service /etc/systemd/system/drawdb.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now drawdb.service
+```
+
+The service pulls the configured image before changing the app container and
+waits for `GET /api/auth/status` to pass its healthcheck. On a failed pull, a
+running old container stays up; if it is stopped, the service starts its local
+copy. Updates and backups share a lock to prevent simultaneous container changes.
+An unhealthy replacement is rolled back to the previous image. If there
+is no local image on first start, the service reports that it could not start.
+After the first healthy start, open `https://APP_DOMAIN/register` and enter the
+bootstrap secret to create the administrator. Then remove `BOOTSTRAP_SECRET`
+from `/etc/drawdb/production.env` and run `sudo systemctl start drawdb.service`
+to recreate the container without it. Updating the app briefly interrupts
+active connections; browsers reconnect and sync the current diagram version.
+Rolling back the image does not roll back a SQLite schema or data change made
+by the newer image.
+The updater exits with an error after a rollback so systemd reports that the
+update failed, even when the previous app is healthy. Registry pulls have a
+timeout; recovery uses the local image and never pulls the failed image again.
+
+Pushes to the Git branch `production` run validation and publish
+`production` plus the full commit SHA to GHCR. Git release tags continue to
+publish their tag name, `latest`, and the commit SHA; the literal Git tag name
+`production` is reserved for the branch image. All published images target
+`linux/amd64`. Updating the VM means running `sudo systemctl start
+drawdb.service` after the image is published. The service unit is a oneshot
+updater, so it can be started again for later updates. It does not configure
+Azure schedules, resource sizes, or costs.
+The intended operating window is Wednesday 13:45–16:10 in `Europe/Warsaw`;
+configure any VM start/stop schedule outside this repository.
+
+The Compose configuration rotates Docker logs and does not set an arbitrary
+memory cap. Backups stop the app cleanly, archive the complete `/data` tree,
+and start the app again even if archiving fails. Store copies away from the VM:
+
+```bash
+sudo /opt/drawdb/deploy/backup-data.sh /mnt/backup/drawdb
+sudo /opt/drawdb/deploy/verify-backup.sh /mnt/backup/drawdb/drawdb-data-....tar.gz
+```
+
+Verification extracts the archive to a private temporary directory, rejects
+unsafe paths and links, and runs SQLite `PRAGMA integrity_check` using the
+local app image. Only the extracted copy is writable during this check so
+SQLite can open WAL databases. On a replacement VM without an existing app
+container, first pull an app image and set `DRAWDB_VERIFY_IMAGE` to that local
+image when running verification or restore (for example,
+`sudo env DRAWDB_VERIFY_IMAGE=ghcr.io/rename343/drawdb-collaborative-with-auth:production /opt/drawdb/deploy/verify-backup.sh ARCHIVE`).
+To restore, choose a new data directory; the script refuses to overwrite an
+existing one:
+
+```bash
+sudo /opt/drawdb/deploy/restore-data.sh /mnt/backup/drawdb/drawdb-data-....tar.gz /srv/drawdb/data-restored
+```
+
+Review the extracted copy, stop the old container with
+`sudo docker stop --timeout 30 drawdb-app`, set `DATA_DIR` to the new directory in
+`/etc/drawdb/production.env`, then start the systemd updater. The previous data
+directory remains available for rollback. A database restore does not restore
+an externally configured `GIT_SECRET_KEY` or SSH private keys; back those up
+separately and restore the same key material before starting the app if Git
+sync depends on them. Without a custom `GIT_SECRET_KEY`, the encryption key is
+stored in SQLite and included in the `/data` archive.
+
+If using SSH remotes, `SSH_KEY_DIR` is mounted read-only at
+`/home/node/.ssh`. Keep the private key and verified `known_hosts` file there;
+the key directory is not part of `/data` and must be backed up separately.
+
+The updater regression scenarios run with `bash deploy/update-drawdb.test.sh`.
+The backup integration scenarios run as root with Node, the installed npm
+dependencies, and Python available: `sudo env "PATH=$PATH" bash deploy/backup.test.sh`.
+Both suites use temporary data and stub Docker control. They cover registry
+failure, rollback, locking, archive failure, SQLite integrity, ownership, and
+refusal to overwrite existing data.
+
+CI also checks production dependencies with
+`npm audit --omit=dev --audit-level=high`. The lockfile includes the compatible
+security updates found during the deployment review. Two moderate package
+warnings remain for React Router 6: [external navigation](https://github.com/remix-run/react-router/security/advisories/GHSA-wrjc-x8rr-h8h6)
+and [SSR hydration](https://github.com/remix-run/react-router/security/advisories/GHSA-337j-9hxr-rhxg).
+The app uses local navigation targets and client-side rendering. Fully clearing
+these package warnings requires a separate migration to React Router 7.18 or
+later; this deployment change keeps the current routing API.
 
 ## Contributing
 

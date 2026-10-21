@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import crypto from "node:crypto";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -11,6 +11,7 @@ const execFileAsync = promisify(execFile);
 const DEFAULT_BRANCH = "main";
 const DEFAULT_AUTH_USERNAME = "x-access-token";
 const COMMAND_TIMEOUT_MS = 30_000;
+const MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
 
 const BRANCH_PATTERN = /^(?!-)(?!.*\.\.)[A-Za-z0-9._\-/]{1,200}$/;
 const DIRECTORY_SEGMENT = /^[A-Za-z0-9._-]{1,64}$/;
@@ -201,8 +202,11 @@ function friendlyMessage(details) {
  */
 export async function git(
   args,
-  { cwd, secrets = [], timeout = COMMAND_TIMEOUT_MS, author } = {},
+  { cwd, secrets = [], timeout = COMMAND_TIMEOUT_MS, author, signal } = {},
 ) {
+  if (signal?.aborted) {
+    throw new GitError("The server is shutting down", { status: 503 });
+  }
   const env = {
     ...process.env,
     GIT_TERMINAL_PROMPT: "0",
@@ -232,14 +236,76 @@ export async function git(
     "advice.detachedHead=false",
   ];
   try {
-    return await execFileAsync("git", [...options, ...args], {
-      cwd,
-      env,
-      timeout,
-      windowsHide: true,
-      maxBuffer: 16 * 1024 * 1024,
+    return await new Promise((resolve, reject) => {
+      let timedOut = false;
+      let aborted = false;
+      let failure;
+      const grouped = process.platform !== "win32";
+      const child = spawn("git", [...options, ...args], {
+        cwd,
+        env,
+        detached: grouped,
+        windowsHide: true,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      const stop = () => {
+        // Git can spawn SSH or HTTP helpers. Kill its process group so those
+        // children cannot keep pipes or the server alive after cancellation.
+        try {
+          if (grouped && child.pid) process.kill(-child.pid, "SIGKILL");
+          else child.kill("SIGKILL");
+        } catch {
+          child.kill("SIGKILL");
+        }
+      };
+      const abort = () => {
+        aborted = true;
+        stop();
+      };
+      const collect = (stream) => {
+        const chunks = [];
+        let bytes = 0;
+        stream.on("data", (chunk) => {
+          bytes += chunk.length;
+          if (bytes <= MAX_OUTPUT_BYTES) chunks.push(chunk);
+          else if (!failure) {
+            failure = new Error("The git command produced too much output");
+            stop();
+          }
+        });
+        return () => Buffer.concat(chunks).toString("utf8");
+      };
+      const stdout = collect(child.stdout);
+      const stderr = collect(child.stderr);
+      child.once("error", (error) => {
+        failure = error;
+      });
+      child.once("close", (code, exitSignal) => {
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", abort);
+        if (aborted) {
+          reject(new GitError("The server is shutting down", { status: 503 }));
+        } else if (failure || code !== 0) {
+          const error =
+            failure || new Error(`git exited with ${exitSignal || code}`);
+          error.stdout = stdout();
+          error.stderr = stderr();
+          error.killed = timedOut;
+          reject(error);
+        } else {
+          resolve({ stdout: stdout(), stderr: stderr() });
+        }
+      });
+      const timer = setTimeout(() => {
+        timedOut = true;
+        stop();
+      }, timeout);
+      timer.unref();
+      signal?.addEventListener("abort", abort, { once: true });
+      if (signal?.aborted) abort();
     });
   } catch (error) {
+    if (isGitError(error)) throw error;
     const details = redact(
       `${error.stderr || ""}\n${error.stdout || ""}`.trim() || error.message,
       secrets,

@@ -23,6 +23,7 @@ import { createApplication } from "./index.js";
 /* global process */
 
 const PASSWORD = "correct-horse-9";
+const BOOTSTRAP_SECRET = "test-bootstrap-secret-for-local-suite-2026";
 const JSON_HEADERS = { "Content-Type": "application/json" };
 
 function temporaryDirectory(prefix) {
@@ -53,13 +54,21 @@ async function listen(application) {
 async function signedInInstance(workdir) {
   process.env.GIT_ALLOW_LOCAL_REMOTES = "1";
   process.env.GIT_WORKDIR = workdir;
-  const application = createApplication({ databasePath: ":memory:" });
+  process.env.GIT_CONFIG_GLOBAL = "/dev/null";
+  const application = createApplication({
+    databasePath: ":memory:",
+    bootstrapSecret: BOOTSTRAP_SECRET,
+  });
   const port = await listen(application);
   const base = `http://127.0.0.1:${port}`;
   const registered = await fetch(`${base}/api/auth/register`, {
     method: "POST",
     headers: JSON_HEADERS,
-    body: JSON.stringify({ username: "root", password: PASSWORD }),
+    body: JSON.stringify({
+      username: "root",
+      password: PASSWORD,
+      bootstrapSecret: BOOTSTRAP_SECRET,
+    }),
   });
   assert.equal(registered.status, 201);
   const cookie = registered.headers.get("set-cookie").split(";")[0];
@@ -189,6 +198,7 @@ test("pushes the schema to a repository and pulls an outside change back", async
     fs.rmSync(root, { recursive: true, force: true });
     delete process.env.GIT_ALLOW_LOCAL_REMOTES;
     delete process.env.GIT_WORKDIR;
+    delete process.env.GIT_CONFIG_GLOBAL;
   });
 
   const authed = { ...JSON_HEADERS, Cookie: cookie };
@@ -230,7 +240,7 @@ test("pushes the schema to a repository and pulls an outside change back", async
       message: "Add customer table",
     }),
   });
-  assert.equal(pushed.status, 200);
+  assert.equal(pushed.status, 200, await pushed.clone().text());
   const pushResult = await pushed.json();
   assert.equal(pushResult.status, "pushed");
   assert.deepEqual(pushResult.files, ["db/sales.json", "db/sales.sql"]);
@@ -305,6 +315,7 @@ test("repository settings are owner-only and never leak the token", async (t) =>
     fs.rmSync(root, { recursive: true, force: true });
     delete process.env.GIT_ALLOW_LOCAL_REMOTES;
     delete process.env.GIT_WORKDIR;
+    delete process.env.GIT_CONFIG_GLOBAL;
   });
 
   const authed = { ...JSON_HEADERS, Cookie: cookie };

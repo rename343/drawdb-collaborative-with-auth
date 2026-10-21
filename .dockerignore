@@ -1,13 +1,18 @@
 # Ignore node_modules
 node_modules
+.git
+.agents
+.codex
+codex-session-*.md
 
 # Ignore logs
 *.log
 logs
 *.log.*
 
-# Ignore environment variables
-.env
+# Ignore local environment files, keeping only the safe deployment template.
+.env*
+!.env.production.example
 
 # Ignore build directories and files
 dist
@@ -25,6 +30,10 @@ temp
 # Ignore Docker-related files
 Dockerfile*
 docker-compose.yml
+compose.yml
+compose.production.yml
+Caddyfile
+deploy/
 
 # Ignore IDE/editor specific files
 .vscode

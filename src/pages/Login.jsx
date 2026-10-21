@@ -35,6 +35,7 @@ export default function Login({ mode = "login" }) {
   const isRegister = mode === "register";
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [bootstrapSecret, setBootstrapSecret] = useState("");
   const [confirmation, setConfirmation] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -62,7 +63,11 @@ export default function Login({ mode = "login" }) {
     }
     setSubmitting(true);
     try {
-      const credentials = { username: username.trim(), password };
+      const credentials = {
+        username: username.trim(),
+        password,
+        bootstrapSecret,
+      };
       if (isRegister) await register(credentials);
       else await login(credentials);
       navigate(redirectTo, { replace: true });
@@ -99,6 +104,25 @@ export default function Login({ mode = "login" }) {
         )}
 
         <form onSubmit={submit} className="flex flex-col gap-4">
+          {isRegister && (
+            <div>
+              <label className="text-sm font-medium" htmlFor="bootstrap-secret">
+                {t("bootstrap_secret")}
+              </label>
+              <Input
+                id="bootstrap-secret"
+                mode="password"
+                value={bootstrapSecret}
+                onChange={setBootstrapSecret}
+                autoComplete="off"
+                className="mt-1"
+              />
+              <div className="text-xs text-zinc-500 mt-1">
+                {t("bootstrap_secret_hint")}
+              </div>
+            </div>
+          )}
+
           <div>
             <label className="text-sm font-medium" htmlFor="username">
               {t("username")}
@@ -159,7 +183,9 @@ export default function Login({ mode = "login" }) {
             size="large"
             block
             loading={submitting}
-            disabled={!username.trim() || !password}
+            disabled={
+              !username.trim() || !password || (isRegister && !bootstrapSecret)
+            }
           >
             {t(isRegister ? "create_admin_account" : "sign_in")}
           </Button>

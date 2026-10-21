@@ -1,5 +1,5 @@
 import { WebSocketServer, WebSocket } from "ws";
-import { parseCookies, SESSION_COOKIE } from "./auth.js";
+import { hashSessionToken, parseCookies, SESSION_COOKIE } from "./auth.js";
 import {
   CLIENT_ID_PATTERN,
   DIAGRAM_ID_PATTERN,
@@ -19,13 +19,22 @@ function send(socket, message) {
   }
 }
 
-export function attachCollaborationServer(server, store, auth) {
+export function attachCollaborationServer(
+  server,
+  store,
+  auth,
+  { allowedOrigin } = {},
+) {
   const wss = new WebSocketServer({
     noServer: true,
     maxPayload: MAX_MESSAGE_BYTES,
+    closeTimeout: 5_000,
   });
   const rooms = new Map();
+  const sessions = new Map();
   const tableLocks = createTableLockManager();
+  let closing = false;
+  let shutdownPromise;
 
   const broadcast = (diagramId, message, except = null) => {
     for (const client of rooms.get(diagramId) || []) {
@@ -53,6 +62,16 @@ export function attachCollaborationServer(server, store, auth) {
   };
 
   server.on("upgrade", (request, socket, head) => {
+    if (closing) {
+      socket.write("HTTP/1.1 503 Service Unavailable\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+    if (allowedOrigin && request.headers.origin !== allowedOrigin) {
+      socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+      socket.destroy();
+      return;
+    }
     const url = new URL(request.url, "http://localhost");
     const match = url.pathname.match(/^\/ws\/diagrams\/([^/]+)$/);
     const diagramId = match?.[1];
@@ -61,9 +80,8 @@ export function attachCollaborationServer(server, store, auth) {
       socket.destroy();
       return;
     }
-    const session = auth.resolveSession(
-      parseCookies(request.headers.cookie)[SESSION_COOKIE],
-    );
+    const sessionToken = parseCookies(request.headers.cookie)[SESSION_COOKIE];
+    const session = auth.resolveSession(sessionToken);
     if (!session) {
       socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
       socket.destroy();
@@ -77,12 +95,17 @@ export function attachCollaborationServer(server, store, auth) {
     wss.handleUpgrade(request, socket, head, (ws) => {
       ws.diagramId = diagramId;
       ws.user = session.user;
+      ws.sessionKey = hashSessionToken(sessionToken);
       wss.emit("connection", ws, request);
     });
   });
 
   wss.on("connection", (socket) => {
     const diagramId = socket.diagramId;
+    if (!sessions.has(socket.sessionKey)) {
+      sessions.set(socket.sessionKey, new Set());
+    }
+    sessions.get(socket.sessionKey).add(socket);
     if (!rooms.has(diagramId)) rooms.set(diagramId, new Set());
     rooms.get(diagramId).add(socket);
     socket.isAlive = true;
@@ -91,6 +114,8 @@ export function attachCollaborationServer(server, store, auth) {
     });
 
     socket.on("message", (raw) => {
+      // ws can still emit incoming frames while its close handshake runs.
+      if (closing || socket.readyState !== WebSocket.OPEN) return;
       let message;
       try {
         message = JSON.parse(raw.toString());
@@ -321,6 +346,9 @@ export function attachCollaborationServer(server, store, auth) {
     });
 
     socket.on("close", () => {
+      const sessionSockets = sessions.get(socket.sessionKey);
+      sessionSockets?.delete(socket);
+      if (sessionSockets?.size === 0) sessions.delete(socket.sessionKey);
       const room = rooms.get(diagramId);
       room?.delete(socket);
       const releasedLocks = socket.participant
@@ -351,8 +379,38 @@ export function attachCollaborationServer(server, store, auth) {
     }
   }, 2_000);
   lockSweep.unref();
-  wss.on("close", () => clearInterval(heartbeat));
-  wss.on("close", () => clearInterval(lockSweep));
+  const clearTimers = () => {
+    clearInterval(heartbeat);
+    clearInterval(lockSweep);
+  };
+  wss.on("close", clearTimers);
+
+  wss.closeSession = (token) => {
+    const sessionKey = hashSessionToken(token);
+    if (!sessionKey) return;
+    for (const socket of sessions.get(sessionKey) || []) {
+      socket.close(1008, "Session ended");
+    }
+  };
+
+  wss.shutdown = ({ timeoutMs = 8_000 } = {}) => {
+    if (shutdownPromise) return shutdownPromise;
+    shutdownPromise = new Promise((resolve) => {
+      closing = true;
+      clearTimers();
+      const terminateTimer = setTimeout(() => {
+        for (const socket of wss.clients) socket.terminate();
+      }, timeoutMs);
+      terminateTimer.unref();
+      wss.close(() => {
+        clearTimeout(terminateTimer);
+        resolve();
+      });
+      for (const socket of wss.clients)
+        socket.close(1001, "Server shutting down");
+    });
+    return shutdownPromise;
+  };
 
   // A snapshot written outside the socket layer — a git pull, for instance —
   // still has to reach everyone who has the diagram open.

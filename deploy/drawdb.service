@@ -1,0 +1,16 @@
+[Unit]
+Description=Update and start drawDB with Docker Compose
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Environment=DRAWDB_APP_DIR=/opt/drawdb
+Environment=DRAWDB_ENV_FILE=/etc/drawdb/production.env
+ExecStart=/opt/drawdb/deploy/update-drawdb.sh
+TimeoutStartSec=10min
+
+[Install]
+WantedBy=multi-user.target
