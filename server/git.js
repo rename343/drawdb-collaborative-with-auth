@@ -2,7 +2,7 @@ import { execFile, spawn } from "node:child_process";
 import crypto from "node:crypto";
 import path from "node:path";
 import { promisify } from "node:util";
-import { isPlainObject } from "./protocol.js";
+import { isPlainObject } from "./validation.js";
 
 /* global process, Buffer */
 

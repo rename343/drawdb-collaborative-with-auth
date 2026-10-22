@@ -17,7 +17,8 @@ import {
 import { createDiagramStore, openDatabase } from "./database.js";
 import { isGitAvailable, isGitError } from "./git.js";
 import { createGitSyncService, defaultGitRoot } from "./gitSync.js";
-import { DIAGRAM_ID_PATTERN, isPlainObject } from "./protocol.js";
+import { createLockRegistry, DIAGRAM_LOCKED_ERROR } from "./lockRegistry.js";
+import { DIAGRAM_ID_PATTERN, isPlainObject } from "./validation.js";
 import { attachCollaborationServer } from "./websocket.js";
 
 /* global Buffer, process */
@@ -141,6 +142,7 @@ export function createApplication({
   staticPath,
   bootstrapSecret = process.env.BOOTSTRAP_SECRET,
   appOrigin = process.env.APP_ORIGIN,
+  lockRegistry,
 } = {}) {
   const allowedOrigin = normalizedOrigin(appOrigin, {
     production: process.env.NODE_ENV === "production",
@@ -148,6 +150,7 @@ export function createApplication({
   const database = openDatabase(databasePath);
   const store = createDiagramStore(database);
   const auth = createAuthStore(database);
+  const locks = lockRegistry ?? createLockRegistry();
   const gitController = new AbortController();
   const gitSync = createGitSyncService({
     db: database,
@@ -195,6 +198,13 @@ export function createApplication({
     body.name.trim().length > 0 &&
     body.name.length <= 200 &&
     isPlainObject(body.document);
+
+  const rejectIfLocked = (req, res, channel) => {
+    const gate = locks.checkWrite({ diagramId: req.params.id, channel });
+    if (gate.allow) return false;
+    res.status(423).json({ error: DIAGRAM_LOCKED_ERROR, lock: gate.lock });
+    return true;
+  };
 
   const startSession = (req, res, user) => {
     const { token, expiresAt } = auth.createSession(user.id);
@@ -413,6 +423,7 @@ export function createApplication({
       });
       return;
     }
+    if (rejectIfLocked(req, res, "http")) return;
     const result = store.updateSnapshot({ id: req.params.id, ...req.body });
     if (result.status === "not_found")
       res.status(404).json({ error: "Diagram not found" });
@@ -542,7 +553,10 @@ export function createApplication({
     "/api/diagrams/:id/git/pull",
     ...gitGuards,
     gitRoute(async (req, res) => {
+      if (rejectIfLocked(req, res, "git")) return;
       const pulled = await gitSync.pull(req.params.id);
+      // A lock may be acquired while the pull fetches or checks out.
+      if (rejectIfLocked(req, res, "git")) return;
       const result = store.updateSnapshot({
         id: req.params.id,
         name: pulled.name ?? req.diagram.name,
@@ -591,6 +605,7 @@ export function createApplication({
   const server = http.createServer(app);
   const websocket = attachCollaborationServer(server, store, auth, {
     allowedOrigin,
+    locks,
   });
 
   auth.pruneExpiredSessions();
