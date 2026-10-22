@@ -478,6 +478,12 @@ export default function Canvas() {
             return;
           }
 
+          // Moving tables closes an open table editor, so its lock is
+          // released immediately instead of blocking other participants.
+          setSelectedElement((prev) =>
+            prev.open ? { ...prev, open: false } : prev,
+          );
+
           const clickedTableIsSelected = bulkSelectedElements.some(
             (item) =>
               item.type === ObjectType.TABLE && item.id === clickedTableId,

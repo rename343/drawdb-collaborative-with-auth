@@ -40,7 +40,7 @@ export default function TableInfo({ data }) {
   const initialColorRef = useRef(data.color);
   const editorRef = useRef(null);
   const { connectionState } = useCollabStatus();
-  const tableLock = useTableLock(data.id);
+  const tableLock = useTableLock(data.id, { immediateRelease: true });
   const collaborationEnabled = connectionState === "connected";
   const currentLock = tableLock.holder;
   const canEdit = !collaborationEnabled || tableLock.isMine;
