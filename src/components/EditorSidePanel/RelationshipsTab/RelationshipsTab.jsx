@@ -40,7 +40,7 @@ export default function RelationshipsTab() {
             selectedElement.open &&
             selectedElement.element === ObjectType.RELATIONSHIP
               ? `${selectedElement.id}`
-              : ""
+              : []
           }
           keepDOM={false}
           lazyRender

@@ -64,7 +64,7 @@ export default function TypesTab() {
           activeKey={
             selectedElement.open && selectedElement.element === ObjectType.TYPE
               ? `${selectedElement.id}`
-              : ""
+              : []
           }
           keepDOM={false}
           lazyRender

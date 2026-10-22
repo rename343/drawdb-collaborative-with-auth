@@ -46,10 +46,12 @@ export default function TablesTab() {
         <Empty title={t("no_tables")} text={t("no_tables_text")} />
       ) : (
         <Collapse
+          // Semi UI ignores falsy activeKey values; an empty array is the
+          // explicit "nothing open" value and actually collapses the panel.
           activeKey={
             selectedElement.open && selectedElement.element === ObjectType.TABLE
               ? `${selectedElement.id}`
-              : ""
+              : []
           }
           keepDOM={false}
           lazyRender

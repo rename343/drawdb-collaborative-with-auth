@@ -38,7 +38,7 @@ export default function NotesTab() {
         <Empty title={t("no_notes")} text={t("no_notes_text")} />
       ) : (
         <Collapse
-          activeKey={selectedElement.open ? `${selectedElement.id}` : ""}
+          activeKey={selectedElement.open ? `${selectedElement.id}` : []}
           keepDOM={false}
           lazyRender
           onChange={(activeKey) => {
