@@ -5,7 +5,7 @@ on:
     branches: [production]
     tags: ["*"]
   pull_request:
-    branches: [production]
+    branches: [production, main]
 
 concurrency:
   group: docker-image-${{ github.ref }}
