@@ -40,3 +40,16 @@
 - `src/components/EditorSidePanel/DBMLEditor.jsx`,
   `src/utils/importFrom/dbml.js`, `src/utils/exportAs/dbml.js` at `25adb9d`.
 - [ADR 0002](../../adr/0002-dbml-exclusive-edit-lock.md).
+
+## M2 status — 2026-10-22
+
+The M2 server diagram edit lock exists only on `feat/m2-dbml` at `d3a5919`
+(committed 2026-10-21). That branch was built on the old M1 history (`e1a5375`,
+`a9d5cb8`, `b6dc23b`), predates `dc59115`, and does not contain it. The branch
+is unmerged and must be rebuilt onto `dc59115` before further M2 work.
+
+M2 tickets are in
+[`.scratch/m2-dbml/issues/`](https://github.com/rename343/drawdb-collaborative-with-auth/tree/feat/m2-dbml/.scratch/m2-dbml/issues)
+on the branch, `01-server-diagram-lock.md` through `04-verify-m2.md`. The
+"Planned M2 behaviour" above is still the plan; no M2 behaviour is merged to
+`main`.

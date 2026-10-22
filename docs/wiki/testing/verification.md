@@ -78,3 +78,41 @@ Remaining human smoke test:
 
 - Real clipboard success path in a normal browser.
 - Full login redirect after a logged-out user opens a share link.
+
+## CI record — 2026-10-22
+
+At `dc59115` (`main` = `production`):
+
+- Build passed on Node 20.x and 22.x
+  ([39772638531](https://github.com/rename343/drawdb-collaborative-with-auth/actions/runs/39772638531)).
+- Docker `validate` passed all 15 steps, including `npm ci`,
+  `npm audit --omit=dev --audit-level=high`, `check:server`, `lint`, `build`,
+  `test:server`, `test:git`, `test:import`, `test:layout`, `test:share`, and the
+  deploy shell syntax/update/backup tests.
+- CodeQL passed
+  ([39772638099](https://github.com/rename343/drawdb-collaborative-with-auth/actions/runs/39772638099)).
+- Docker run
+  [39772672186](https://github.com/rename343/drawdb-collaborative-with-auth/actions/runs/39772672186)
+  published `ghcr.io/rename343/drawdb-collaborative-with-auth:production` and
+  `:dc59115`.
+
+The merge sequence is recorded in the [Merge log](../workflow/merge-log.md).
+
+## GitHub Actions permission pitfall — 2026-10-22
+
+These are repository settings, not files in this repository.
+
+- `allowed_actions` was `local_only`. Every PR run then failed with
+  `startup_failure` within 0 s because `actions/checkout` and
+  `actions/setup-node` were blocked.
+- The owner changed it to `selected` with `github_owned_allowed=true` and
+  `verified_allowed=true`. `verified_allowed` was needed for
+  `docker/setup-buildx-action`, `docker/login-action` and
+  `docker/build-push-action`.
+- `default_workflow_permissions` remained `read`.
+- The `gh` token has `repo` but not the `workflow` OAuth scope. PRs that change
+  `.github/workflows` were therefore merged as signed local merge commits and
+  pushed (`d604f5e`, `dc59115`).
+
+Re-check these settings before diagnosing a CI startup failure as a code or test
+problem. Settings and API state were read on 2026-10-22.
