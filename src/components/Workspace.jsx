@@ -176,14 +176,25 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
             document,
             baseVersion,
           });
-          return { version: updated.version, diagram: updated };
+          return { version: updated.version };
         } catch (error) {
           if (error.diagram) {
-            return { diagram: error.diagram, version: error.diagram.version };
+            return {
+              conflict: true,
+              diagram: error.diagram,
+              version: error.diagram.version,
+            };
           }
           throw error;
         }
       },
+    }),
+    [loadedDiagramId],
+  );
+
+  const reader = useMemo(
+    () => ({
+      read: () => diagramApi.get(loadedDiagramId),
     }),
     [loadedDiagramId],
   );
@@ -256,6 +267,7 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
           version: diagram.version,
           document: documentPort,
           writer,
+          reader,
           initialSnapshot: {
             name: diagram.name,
             document: diagram.document ?? diagram,
@@ -311,6 +323,7 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
     session,
     documentPort,
     writer,
+    reader,
     setTransform,
     setRedoStack,
     setUndoStack,

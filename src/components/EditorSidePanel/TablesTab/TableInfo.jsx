@@ -42,7 +42,7 @@ export default function TableInfo({ data }) {
   const { connectionState } = useCollabStatus();
   const tableLock = useTableLock(data.id);
   const collaborationEnabled = connectionState === "connected";
-  const currentLock = tableLock.holder ?? tableLock.lock;
+  const currentLock = tableLock.holder;
   const canEdit = !collaborationEnabled || tableLock.isMine;
 
   useEffect(() => {

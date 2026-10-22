@@ -44,33 +44,22 @@ function tableView(session, state, tableIds) {
   const locks = tableIds
     .map((tableId) => state.tableLocks[tableId])
     .filter(Boolean);
+  const ownDiagramLock =
+    state.diagramLock?.clientId === session.identity.clientId;
   const holder =
-    locks.find((lock) => lock.clientId !== session.identity.clientId) ?? null;
+    locks.find((lock) => lock.clientId !== session.identity.clientId) ??
+    (state.diagramLock && !ownDiagramLock ? state.diagramLock : null);
   const allMine =
+    !state.diagramLock &&
     tableIds.length > 0 &&
     tableIds.every(
       (tableId) =>
         state.tableLocks[tableId]?.clientId === session.identity.clientId,
     );
-  const pending = tableIds.some((tableId) => state.pendingTables[tableId]);
-  const status =
-    state.connection !== "connected"
-      ? "offline"
-      : allMine
-        ? "held"
-        : holder
-          ? "blocked"
-          : pending
-            ? "requesting"
-            : "idle";
 
   return {
-    status,
     isMine: allMine,
-    allMine,
     holder,
-    lock: tableIds.length === 1 ? state.tableLocks[tableIds[0]] ?? null : null,
-    tableLocks: state.tableLocks,
   };
 }
 
@@ -112,18 +101,18 @@ export function useTableAction() {
         ) {
           return { ok: true, value: await action() };
         }
+        const diagramLock = session.getState().diagramLock;
+        if (diagramLock) {
+          return {
+            ok: false,
+            blockedBy:
+              diagramLock.clientId === session.identity.clientId
+                ? null
+                : diagramLock.displayName,
+          };
+        }
         const lease = session.claim(tableIds);
-        let timeoutId;
-        const result = await Promise.race([
-          lease.whenSettled(),
-          new Promise((resolve) => {
-            timeoutId = globalThis.setTimeout(
-              () => resolve({ ok: false, blockedBy: null }),
-              5_000,
-            );
-          }),
-        ]);
-        globalThis.clearTimeout(timeoutId);
+        const result = await lease.whenSettled();
         try {
           if (!result.ok) return result;
           return { ok: true, value: await action() };
@@ -134,6 +123,26 @@ export function useTableAction() {
     }),
     [session],
   );
+}
+
+export function useDiagramEdit() {
+  const session = useCollabSession();
+  const state = useCollabState();
+  const ownLock = state.diagramLock?.clientId === session.identity.clientId;
+  const holder =
+    state.diagramLock && !ownLock
+      ? state.diagramLock
+      : state.diagramBlockedBy ?? null;
+
+  return {
+    phase: state.diagramPhase,
+    isMine: state.diagramPhase === "editing" && ownLock,
+    holder,
+    guiDisabled: Boolean(state.diagramLock) || state.diagramPhase === "editing",
+    begin: session.beginDiagramEdit,
+    cancel: session.cancelDiagramEdit,
+    commit: session.commitDiagramEdit,
+  };
 }
 
 export function useCollabStatus() {
