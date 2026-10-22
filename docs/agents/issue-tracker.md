@@ -5,6 +5,8 @@ Issues and specs live as Markdown files in `.scratch/`.
 ## Conventions
 
 - One feature per directory: `.scratch/<feature-slug>/`.
+- Unscheduled work without a spec lives in `.scratch/backlog/issues/`; security
+  work lives in `.scratch/security/issues/`.
 - The spec is `.scratch/<feature-slug>/spec.md`.
 - Implementation tickets are separate files at `.scratch/<feature-slug>/issues/<NN>-<slug>.md`, numbered from `01`.
 - Record triage state as a `Status:` line near the top of each ticket, using the strings in `triage-labels.md`.
