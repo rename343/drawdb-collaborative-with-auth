@@ -67,7 +67,14 @@ export default function TablesTab() {
             keyPrefix="tables-tab"
             items={tables}
             onChange={(newTables) => setTables(newTables)}
-            afterChange={() => setSaveState(State.SAVING)}
+            afterChange={() => {
+              setSaveState(State.SAVING);
+              setSelectedElement((prev) =>
+                prev.element === ObjectType.TABLE && prev.open
+                  ? { ...prev, open: false }
+                  : prev,
+              );
+            }}
             renderItem={(item) => <TableListItem table={item} />}
           />
         </Collapse>
