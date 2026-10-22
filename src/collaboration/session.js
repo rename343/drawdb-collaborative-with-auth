@@ -423,6 +423,7 @@ export function createCollabSession({
         version: fresh.version,
         stale: false,
         refreshed: true,
+        snapshot: fresh,
       };
     } catch (error) {
       releaseDiagramLock();
@@ -463,14 +464,13 @@ export function createCollabSession({
     }
     if (savePromise) await savePromise;
     try {
-      await sendSnapshot(snapshot);
+      const acknowledgement = await sendSnapshot(snapshot);
       session.lastApplied = {
         name: snapshot.name,
         document: snapshot.document,
       };
-      const version = state.version;
       releaseDiagramLock();
-      return { ok: true, version };
+      return { ok: true, version: acknowledgement.version };
     } catch (error) {
       return {
         ok: false,
@@ -553,7 +553,7 @@ export function createCollabSession({
         emit({ version: message.version });
         session.lastApplied = pendingSave.snapshot;
         saveState("saved");
-        pendingSave.resolve();
+        pendingSave.resolve({ version: message.version });
       } else {
         emit({ version: message.version });
         if (message.clientId !== identity.clientId) {

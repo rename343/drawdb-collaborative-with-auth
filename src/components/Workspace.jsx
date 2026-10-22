@@ -23,6 +23,7 @@ import {
 } from "../hooks";
 import { useCollabSession, useCollabState } from "../collaboration/react";
 import { snapshotsEqual } from "../collaboration/equal";
+import { applyDBMLToDocument } from "../utils/importFrom/dbmlApply";
 import FloatingControls from "./FloatingControls";
 import { Modal, Tag } from "@douyinfe/semi-ui";
 import { useTranslation } from "react-i18next";
@@ -207,6 +208,43 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
     [applyDiagramState, session],
   );
 
+  const applyDBML = useCallback(
+    async (parsed) => {
+      const document = applyDBMLToDocument(parsed, buildDocument());
+      setSaveState(State.SAVING);
+      const result = await session.commitDiagramEdit({
+        name: title,
+        document,
+      });
+      if (!result.ok) {
+        setSaveState(State.ERROR);
+        return result;
+      }
+
+      // A newer remote snapshot may have landed while the acknowledgement was
+      // in flight. In that case it already contains this Apply.
+      if (session.getState().version === result.version) {
+        setTables(document.tables);
+        setRelationships(document.references);
+        setEnums(document.enums);
+        setUndoStack([]);
+        setRedoStack([]);
+      }
+      return result;
+    },
+    [
+      buildDocument,
+      session,
+      setEnums,
+      setRedoStack,
+      setRelationships,
+      setSaveState,
+      setTables,
+      setUndoStack,
+      title,
+    ],
+  );
+
   const save = useCallback(async () => {
     if (!isNewDiagram) {
       await session.saveNow();
@@ -254,13 +292,13 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
       setRedoStack([]);
       setTransform({ zoom: 1, pan: { x: 0, y: 0 } });
       setTitle("Untitled diagram");
-      setLayout((prev) => ({ ...prev, readOnly: false }));
+      setLayout((prev) => ({ ...prev, localReadOnly: false }));
     };
 
     const loadDiagram = async (id) => {
       try {
         const diagram = await diagramApi.get(id);
-        setLayout((prev) => ({ ...prev, readOnly: false }));
+        setLayout((prev) => ({ ...prev, localReadOnly: false }));
         applyDiagramState(diagram);
         session.connect({
           diagramId: id,
@@ -422,7 +460,12 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
         style={isRtl(i18n.language) ? { direction: "rtl" } : {}}
       >
         {layout.sidebar && (
-          <SidePanel resize={resize} setResize={setResize} width={width} />
+          <SidePanel
+            resize={resize}
+            setResize={setResize}
+            width={width}
+            applyDBML={applyDBML}
+          />
         )}
         <div className="relative flex-1 min-w-0 h-full overflow-hidden">
           <CanvasContextProvider className="h-full w-full">

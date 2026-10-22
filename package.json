@@ -13,6 +13,7 @@
     "test:git": "node --test server/git.test.js",
     "test:collab": "node --test src/collaboration/session.test.js",
     "test:import": "node --test src/utils/importSQL/normalize.test.js",
+    "test:dbml": "node --test src/utils/importFrom/dbmlApply.test.js",
     "test:layout": "node --test src/utils/autoLayout/autoLayout.test.js",
     "test:share": "node --test src/utils/share.test.js",
     "build": "vite build && node scripts/precompress.mjs",
