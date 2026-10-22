@@ -1,5 +1,6 @@
 import { useEffect } from "react";
-import { useCanvas, useCollab } from "../hooks";
+import { useCanvas } from "../hooks";
+import { useCollabSession, useCollabStatus } from "../collaboration/react";
 
 export default function CollaborationCursors() {
   const {
@@ -7,14 +8,15 @@ export default function CollaborationCursors() {
     coords: { toScreenSpace },
     pointer,
   } = useCanvas();
-  const { emitAwareness, identity, participants, remoteCursors } = useCollab();
+  const session = useCollabSession();
+  const { identity, participants, remoteCursors } = useCollabStatus();
   const pointerX = pointer.spaces.diagram.x;
   const pointerY = pointer.spaces.diagram.y;
 
   useEffect(() => {
     if (!pointer.active) return;
-    emitAwareness({ x: pointerX, y: pointerY });
-  }, [emitAwareness, pointer.active, pointerX, pointerY]);
+    session.sendCursor({ x: pointerX, y: pointerY });
+  }, [session, pointer.active, pointerX, pointerY]);
 
   return Object.entries(remoteCursors).map(([clientId, cursor]) => {
     const participant = participants.find((item) => item.clientId === clientId);

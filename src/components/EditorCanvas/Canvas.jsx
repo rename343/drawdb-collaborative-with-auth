@@ -25,8 +25,8 @@ import {
   useNotes,
   useLayout,
   useSaveState,
-  useCollab,
 } from "../../hooks";
+import { useCollabSession } from "../../collaboration/react";
 import { useTranslation } from "react-i18next";
 import { useEventListener } from "usehooks-ts";
 import { areFieldsCompatible, getTableHeight } from "../../utils/utils";
@@ -76,41 +76,17 @@ export default function Canvas() {
     endX: 0,
     endY: 0,
   });
-  const {
-    acquireTableLocks,
-    emitAwareness,
-    isTableLockedByOther,
-    releaseTableLocks,
-    tableLocks,
-  } = useCollab();
-  const lastLinkingRef = useRef(false);
+  const session = useCollabSession();
   const rightClickPanned = useRef(false);
   const pointerDownActiveRef = useRef(false);
-  const dragLockIdsRef = useRef([]);
+  const dragLeaseRef = useRef(null);
 
   useEffect(() => {
-    if (linking) {
-      emitAwareness({
-        linking: {
-          startX: linkingLine.startX,
-          startY: linkingLine.startY,
-          endX: linkingLine.endX,
-          endY: linkingLine.endY,
-        },
-      });
-      lastLinkingRef.current = true;
-    } else if (lastLinkingRef.current) {
-      emitAwareness({ linking: null });
-      lastLinkingRef.current = false;
-    }
-  }, [
-    linking,
-    linkingLine.startX,
-    linkingLine.startY,
-    linkingLine.endX,
-    linkingLine.endY,
-    emitAwareness,
-  ]);
+    return () => {
+      dragLeaseRef.current?.release();
+      dragLeaseRef.current = null;
+    };
+  }, []);
   const [hoveredTable, setHoveredTable] = useState({
     tableId: null,
     fieldId: null,
@@ -370,6 +346,11 @@ export default function Canvas() {
         };
         if (el.type === ObjectType.TABLE) {
           updateTable(el.id, { ...elementFinalCoords });
+          session.previewTableMove(
+            el.id,
+            elementFinalCoords.x,
+            elementFinalCoords.y,
+          );
         }
         if (el.type === ObjectType.AREA) {
           updateArea(el.id, { ...elementFinalCoords });
@@ -483,8 +464,8 @@ export default function Canvas() {
           !pointerDownElement.element.locked
         ) {
           const clickedTableId = pointerDownElement.element.id;
-          if (isTableLockedByOther(clickedTableId)) {
-            const lock = tableLocks[clickedTableId];
+          if (session.isTableLockedByOther(clickedTableId)) {
+            const lock = session.getTableLock(clickedTableId);
             Toast.warning(
               t("collaboration_table_lock_denied", {
                 name: lock?.displayName ?? t("collaboration_participant"),
@@ -506,15 +487,28 @@ export default function Canvas() {
                 .filter((item) => item.type === ObjectType.TABLE)
                 .map((item) => item.id)
             : [clickedTableId];
-          if (!(await acquireTableLocks(tableIds))) {
-            Toast.warning(t("collaboration_table_lock_unavailable"));
-            return;
+          if (session.getState().connection === "connected") {
+            dragLeaseRef.current?.release();
+            dragLeaseRef.current = null;
+            const lease = session.claim(tableIds);
+            const result = await lease.whenSettled();
+            if (!result.ok) {
+              lease.release();
+              Toast.warning(
+                result.blockedBy
+                  ? t("collaboration_table_lock_denied", {
+                      name: result.blockedBy,
+                    })
+                  : t("collaboration_table_lock_unavailable"),
+              );
+              return;
+            }
+            if (!pointerDownActiveRef.current) {
+              lease.release();
+              return;
+            }
+            dragLeaseRef.current = lease;
           }
-          if (!pointerDownActiveRef.current) {
-            releaseTableLocks(tableIds);
-            return;
-          }
-          dragLockIdsRef.current = tableIds;
         }
         handlePointerDownOnElement(e, pointerDownElement);
       }
@@ -604,11 +598,8 @@ export default function Canvas() {
       }
     }
     setDragging(notDragging);
-    if (dragLockIdsRef.current.length > 0) {
-      const tableIds = dragLockIdsRef.current;
-      dragLockIdsRef.current = [];
-      window.setTimeout(() => releaseTableLocks(tableIds), 2_000);
-    }
+    dragLeaseRef.current?.release();
+    dragLeaseRef.current = null;
 
     if (panning.isPanning && didPan()) {
       setSaveState(State.SAVING);

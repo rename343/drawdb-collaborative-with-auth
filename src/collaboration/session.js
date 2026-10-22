@@ -1,0 +1,684 @@
+import { nanoid } from "nanoid";
+import { CONNECTION_STATE, MESSAGE_TYPES } from "./protocol.js";
+
+const INITIAL_STATE = {
+  connection: CONNECTION_STATE.DISCONNECTED,
+  version: 0,
+  participants: [],
+  remoteCursors: {},
+  tableLocks: {},
+  ownTableLocks: {},
+  pendingTables: {},
+  save: { state: "idle", at: null },
+};
+
+const RELEASE_GRACE_MS = 2_000;
+const LOCK_TIMEOUT_MS = 5_000;
+const RENEW_EVERY_MS = 4_000;
+const RECONNECT_MAX_MS = 15_000;
+
+export function createCollabSession({
+  identity,
+  transport,
+  clock = {
+    now: () => Date.now(),
+    setTimeout: (callback, delay) => globalThis.setTimeout(callback, delay),
+    clearTimeout: (id) => globalThis.clearTimeout(id),
+  },
+}) {
+  let state = INITIAL_STATE;
+  let session = null;
+  let joined = false;
+  let reconnectAttempts = 0;
+  let reconnectTimer = null;
+  let renewTimer = null;
+  let saveTimer = null;
+  let savePromise = null;
+  const listeners = new Set();
+  const pendingSaves = new Map();
+  const previewThrottle = new Map();
+  let cursorSentAt = 0;
+
+  const desired = new Map();
+  const leases = new Set();
+  const held = new Map();
+  const pending = new Map();
+  const pendingByTable = new Map();
+  const blocked = new Map();
+  const graceTimers = new Map();
+
+  const emit = (patch) => {
+    state = { ...state, ...patch };
+    for (const listener of listeners) listener(state);
+  };
+
+  const send = (message) => {
+    if (!session) return;
+    transport.send(JSON.stringify(message));
+  };
+
+  const emitOwnLocks = () => {
+    emit({
+      ownTableLocks: Object.fromEntries(
+        [...held.keys()].map((tableId) => [tableId, true]),
+      ),
+      pendingTables: Object.fromEntries(
+        [...pendingByTable.keys()].map((tableId) => [tableId, true]),
+      ),
+    });
+  };
+
+  const resolveLeases = () => {
+    for (const lease of leases) {
+      if (lease.settled) continue;
+      if (lease.tables.every((tableId) => held.has(tableId))) {
+        lease.settled = true;
+        lease.resolve({ ok: true });
+        continue;
+      }
+      const blockedTable = lease.tables.find((tableId) => blocked.has(tableId));
+      if (blockedTable) {
+        lease.settled = true;
+        lease.resolve({
+          ok: false,
+          blockedBy: blocked.get(blockedTable)?.displayName ?? null,
+        });
+      }
+    }
+  };
+
+  const releaseHeldTable = (tableId) => {
+    const lock = held.get(tableId);
+    if (!lock) return;
+    if (joined) {
+      send({
+        type: MESSAGE_TYPES.TABLE_LOCK_RELEASE,
+        diagramId: session.diagramId,
+        tableId,
+        token: lock.token,
+      });
+    }
+    held.delete(tableId);
+    const tableLocks = { ...state.tableLocks };
+    delete tableLocks[tableId];
+    emit({ tableLocks });
+    emitOwnLocks();
+  };
+
+  const scheduleGraceRelease = (tableId) => {
+    if (graceTimers.has(tableId) || held.has(tableId) === false) return;
+    const timer = clock.setTimeout(() => {
+      graceTimers.delete(tableId);
+      if ((desired.get(tableId) ?? 0) > 0) return;
+      releaseHeldTable(tableId);
+    }, RELEASE_GRACE_MS);
+    graceTimers.set(tableId, timer);
+  };
+
+  const requestTable = (tableId) => {
+    if (
+      !session ||
+      !joined ||
+      pendingByTable.has(tableId) ||
+      held.has(tableId)
+    ) {
+      return;
+    }
+    const requestId = nanoid();
+    pending.set(requestId, tableId);
+    pendingByTable.set(tableId, requestId);
+    send({
+      type: MESSAGE_TYPES.TABLE_LOCK_ACQUIRE,
+      diagramId: session.diagramId,
+      tableId,
+      requestId,
+    });
+    clock.setTimeout(() => {
+      if (pending.get(requestId) !== tableId) return;
+      pending.delete(requestId);
+      pendingByTable.delete(tableId);
+      blocked.set(tableId, null);
+      emitOwnLocks();
+      resolveLeases();
+    }, LOCK_TIMEOUT_MS);
+    emitOwnLocks();
+  };
+
+  const applySnapshot = (message, source) => {
+    if (!session) return;
+    session.document.apply(message, { source });
+    session.lastApplied = {
+      name: message.name,
+      document: message.document,
+    };
+    emit({
+      version: message.version,
+      save: { ...state.save, state: "saved" },
+    });
+  };
+
+  const rejectPendingSaves = (reason) => {
+    for (const [operationId, pendingSave] of pendingSaves) {
+      clock.clearTimeout(pendingSave.timer);
+      pendingSaves.delete(operationId);
+      pendingSave.reject(new Error(reason));
+    }
+  };
+
+  const saveState = (next, error) => {
+    emit({
+      save: {
+        state: next,
+        at: clock.now(),
+        ...(error ? { error } : {}),
+      },
+    });
+  };
+
+  const sendSnapshot = (snapshot) => {
+    const operationId = nanoid();
+    return new Promise((resolve, reject) => {
+      const timer = clock.setTimeout(() => {
+        pendingSaves.delete(operationId);
+        saveState("error", "Save acknowledgement timed out");
+        reject(new Error("Save acknowledgement timed out"));
+      }, 10_000);
+      pendingSaves.set(operationId, {
+        resolve,
+        reject,
+        timer,
+        snapshot,
+      });
+      send({
+        type: MESSAGE_TYPES.OPERATION,
+        diagramId: session.diagramId,
+        clientId: identity.clientId,
+        operationId,
+        baseVersion: state.version,
+        operation: {
+          type: "snapshot.replace",
+          payload: { name: snapshot.name, document: snapshot.document },
+        },
+      });
+    });
+  };
+
+  const writeSnapshot = async (snapshot) => {
+    const result = await session.writer.write({
+      name: snapshot.name,
+      document: snapshot.document,
+      baseVersion: state.version,
+    });
+    if (result?.diagram) {
+      session.document.apply(result.diagram, { source: "remote" });
+      session.lastApplied = {
+        name: result.diagram.name,
+        document: result.diagram.document,
+      };
+      emit({ version: result.version ?? result.diagram.version });
+      saveState("conflict");
+      return;
+    }
+    emit({ version: result.version });
+    session.lastApplied = snapshot;
+    saveState("saved");
+  };
+
+  const saveNow = async () => {
+    if (saveTimer !== null) {
+      clock.clearTimeout(saveTimer);
+      saveTimer = null;
+    }
+    if (savePromise) await savePromise;
+    if (!session || !session.document) return;
+    const snapshot = session.document.read();
+    if (!snapshot) return;
+    if (
+      session.lastApplied &&
+      session.document.equal(snapshot, session.lastApplied)
+    ) {
+      saveState("saved");
+      return;
+    }
+
+    let saved = false;
+    savePromise = (async () => {
+      saveState("saving");
+      try {
+        if (joined) {
+          await sendSnapshot(snapshot);
+          session.lastApplied = snapshot;
+          saveState("saved");
+        } else {
+          if (!session.writer) {
+            throw new Error("Snapshot writer is unavailable");
+          }
+          await writeSnapshot(snapshot);
+        }
+        saved = true;
+      } catch (error) {
+        if (!["error", "conflict", "offline"].includes(state.save.state)) {
+          saveState("error", error.message);
+        }
+      } finally {
+        savePromise = null;
+        if (
+          saved &&
+          session &&
+          !session.document.equal(session.document.read(), snapshot)
+        ) {
+          scheduleSave();
+        }
+      }
+    })();
+    await savePromise;
+  };
+
+  const scheduleSave = () => {
+    if (saveTimer !== null) clock.clearTimeout(saveTimer);
+    let resolve;
+    const promise = new Promise((next) => {
+      resolve = next;
+    });
+    saveTimer = clock.setTimeout(async () => {
+      saveTimer = null;
+      await saveNow();
+      resolve();
+    }, 600);
+    return promise;
+  };
+
+  const sendCursor = ({ x, y, selected = null } = {}) => {
+    if (!session || !joined || !Number.isFinite(x) || !Number.isFinite(y)) {
+      return;
+    }
+    const now = clock.now();
+    if (now - cursorSentAt < 50) return;
+    cursorSentAt = now;
+    send({
+      type: MESSAGE_TYPES.CURSOR,
+      diagramId: session.diagramId,
+      x,
+      y,
+      selected,
+    });
+  };
+
+  const previewTableMove = (tableId, x, y) => {
+    if (!session || !joined || !held.has(tableId)) return;
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+    const current = previewThrottle.get(tableId) ?? {
+      lastSent: 0,
+      timer: null,
+      payload: null,
+    };
+    current.payload = { id: tableId, x, y };
+
+    const flush = () => {
+      current.timer = null;
+      current.lastSent = clock.now();
+      send({
+        type: MESSAGE_TYPES.OPERATION_PREVIEW,
+        diagramId: session.diagramId,
+        operation: { type: "table.move", payload: current.payload },
+      });
+    };
+
+    const remaining = 50 - (clock.now() - current.lastSent);
+    if (remaining <= 0) {
+      if (current.timer !== null) clock.clearTimeout(current.timer);
+      flush();
+    } else if (current.timer === null) {
+      current.timer = clock.setTimeout(flush, remaining);
+    }
+    previewThrottle.set(tableId, current);
+  };
+
+  const handleLockState = (message) => {
+    const nextLocks = Object.fromEntries(
+      (message.locks || []).map((lock) => [lock.tableId, lock]),
+    );
+    emit({ tableLocks: nextLocks });
+
+    for (const [tableId, lock] of held) {
+      if (
+        !nextLocks[tableId] ||
+        nextLocks[tableId].clientId !== identity.clientId ||
+        nextLocks[tableId].token !== lock.token
+      ) {
+        held.delete(tableId);
+      }
+    }
+
+    for (const tableId of desired.keys()) {
+      const lock = nextLocks[tableId];
+      if (lock && lock.clientId !== identity.clientId) {
+        held.delete(tableId);
+        blocked.set(tableId, lock);
+      } else if (lock) {
+        blocked.delete(tableId);
+        held.set(tableId, lock);
+      } else if (!pendingByTable.has(tableId)) {
+        blocked.delete(tableId);
+        requestTable(tableId);
+      }
+    }
+
+    emitOwnLocks();
+    resolveLeases();
+  };
+
+  const handleMessage = (raw) => {
+    let message;
+    try {
+      message = JSON.parse(raw);
+    } catch {
+      return;
+    }
+
+    if (message.type === MESSAGE_TYPES.JOINED) {
+      joined = true;
+      reconnectAttempts = 0;
+      emit({
+        version: message.version,
+        connection: CONNECTION_STATE.CONNECTED,
+      });
+      for (const tableId of desired.keys()) requestTable(tableId);
+      return;
+    }
+
+    if (message.type === MESSAGE_TYPES.SNAPSHOT) {
+      applySnapshot(message, "remote");
+      return;
+    }
+
+    if (message.type === MESSAGE_TYPES.RESYNC_REQUIRED) {
+      applySnapshot(message, "remote");
+      rejectPendingSaves("The diagram changed while saving");
+      saveState("conflict");
+      return;
+    }
+
+    if (message.type === MESSAGE_TYPES.OPERATION_APPLIED) {
+      const pendingSave = pendingSaves.get(message.operationId);
+      if (pendingSave) {
+        clock.clearTimeout(pendingSave.timer);
+        pendingSaves.delete(message.operationId);
+        emit({ version: message.version });
+        session.lastApplied = pendingSave.snapshot;
+        saveState("saved");
+        pendingSave.resolve();
+      } else {
+        emit({ version: message.version });
+        if (message.clientId !== identity.clientId) {
+          applySnapshot(
+            {
+              name: message.operation.payload.name,
+              document: message.operation.payload.document,
+              version: message.version,
+            },
+            "remote",
+          );
+        }
+      }
+      return;
+    }
+
+    if (message.type === MESSAGE_TYPES.ERROR) {
+      const pendingSave = message.operationId
+        ? pendingSaves.get(message.operationId)
+        : null;
+      if (pendingSave) {
+        clock.clearTimeout(pendingSave.timer);
+        pendingSaves.delete(message.operationId);
+        saveState("error", message.message || "Save rejected");
+        pendingSave.reject(new Error(message.message || "Save rejected"));
+      }
+      return;
+    }
+
+    if (message.type === MESSAGE_TYPES.PRESENCE) {
+      emit({ participants: message.participants || [] });
+      return;
+    }
+
+    if (message.type === MESSAGE_TYPES.TABLE_LOCK_STATE) {
+      handleLockState(message);
+      return;
+    }
+
+    if (message.type === MESSAGE_TYPES.TABLE_LOCK_GRANTED) {
+      const tableId = pending.get(message.requestId);
+      if (tableId === undefined) return;
+      pending.delete(message.requestId);
+      pendingByTable.delete(tableId);
+      held.set(tableId, message.lock);
+      blocked.delete(tableId);
+      emit({
+        tableLocks: { ...state.tableLocks, [tableId]: message.lock },
+      });
+      if ((desired.get(tableId) ?? 0) === 0) {
+        releaseHeldTable(tableId);
+      } else {
+        emitOwnLocks();
+      }
+      resolveLeases();
+      return;
+    }
+
+    if (message.type === MESSAGE_TYPES.TABLE_LOCK_DENIED) {
+      const tableId = pending.get(message.requestId);
+      if (tableId === undefined) return;
+      pending.delete(message.requestId);
+      pendingByTable.delete(tableId);
+      blocked.set(tableId, message.lock ?? null);
+      emitOwnLocks();
+      resolveLeases();
+      return;
+    }
+
+    if (message.type === MESSAGE_TYPES.CURSOR) {
+      emit({
+        remoteCursors: {
+          ...state.remoteCursors,
+          [message.clientId]: {
+            x: message.x,
+            y: message.y,
+            selected: message.selected,
+          },
+        },
+      });
+    }
+  };
+
+  const scheduleRenew = () => {
+    renewTimer = clock.setTimeout(() => {
+      if (!session) return;
+      if (joined) {
+        for (const [tableId, lock] of held) {
+          send({
+            type: MESSAGE_TYPES.TABLE_LOCK_RENEW,
+            diagramId: session.diagramId,
+            tableId,
+            token: lock.token,
+          });
+        }
+      }
+      scheduleRenew();
+    }, RENEW_EVERY_MS);
+  };
+
+  const clearTransientLocks = () => {
+    held.clear();
+    pending.clear();
+    pendingByTable.clear();
+    blocked.clear();
+    for (const timer of graceTimers.values()) clock.clearTimeout(timer);
+    graceTimers.clear();
+    emitOwnLocks();
+  };
+
+  const handleOpen = () => {
+    send({
+      type: MESSAGE_TYPES.JOIN,
+      diagramId: session.diagramId,
+      participant: identity,
+      lastVersion: state.version,
+    });
+  };
+
+  const handleClose = () => {
+    joined = false;
+    if (!session) return;
+    clearTransientLocks();
+    const hadPendingSaves = pendingSaves.size > 0;
+    rejectPendingSaves("Connection closed before the save was acknowledged");
+    if (hadPendingSaves) saveState("offline");
+    emit({ connection: CONNECTION_STATE.CONNECTING });
+    const delay = Math.min(1_000 * 2 ** reconnectAttempts, RECONNECT_MAX_MS);
+    reconnectAttempts += 1;
+    reconnectTimer = clock.setTimeout(() => {
+      if (!session) return;
+      transport.open({
+        diagramId: session.diagramId,
+        onOpen: handleOpen,
+        onMessage: handleMessage,
+        onClose: handleClose,
+      });
+    }, delay);
+  };
+
+  const connect = ({
+    diagramId,
+    version,
+    document,
+    writer,
+    initialSnapshot = null,
+  }) => {
+    clock.clearTimeout(reconnectTimer);
+    clock.clearTimeout(renewTimer);
+    clock.clearTimeout(saveTimer);
+    rejectPendingSaves("Connection replaced before the save was acknowledged");
+    saveTimer = null;
+    savePromise = null;
+    session = null;
+    transport.close();
+    session = { diagramId, document, writer, lastApplied: initialSnapshot };
+    joined = false;
+    reconnectAttempts = 0;
+    clearTransientLocks();
+    emit({
+      ...INITIAL_STATE,
+      connection: CONNECTION_STATE.CONNECTING,
+      version,
+    });
+    transport.open({
+      diagramId,
+      onOpen: handleOpen,
+      onMessage: handleMessage,
+      onClose: handleClose,
+    });
+    scheduleRenew();
+  };
+
+  const disconnect = () => {
+    session = null;
+    joined = false;
+    clock.clearTimeout(reconnectTimer);
+    clock.clearTimeout(renewTimer);
+    clock.clearTimeout(saveTimer);
+    for (const preview of previewThrottle.values()) {
+      if (preview.timer !== null) clock.clearTimeout(preview.timer);
+    }
+    previewThrottle.clear();
+    saveTimer = null;
+    savePromise = null;
+    rejectPendingSaves("Collaboration disconnected");
+    clearTransientLocks();
+    desired.clear();
+    leases.clear();
+    transport.close();
+    emit({ ...INITIAL_STATE });
+  };
+
+  const claim = (tableIds) => {
+    const tables = [...new Set(tableIds)].sort();
+    let resolve;
+    const promise = new Promise((next) => {
+      resolve = next;
+    });
+    const lease = {
+      tables,
+      active: true,
+      settled: false,
+      resolve,
+      whenSettled: () => promise,
+      release: () => releaseLease(lease),
+    };
+    leases.add(lease);
+
+    for (const tableId of tables) {
+      desired.set(tableId, (desired.get(tableId) ?? 0) + 1);
+      const graceTimer = graceTimers.get(tableId);
+      if (graceTimer !== undefined) {
+        clock.clearTimeout(graceTimer);
+        graceTimers.delete(tableId);
+      }
+      blocked.delete(tableId);
+      if (!held.has(tableId)) requestTable(tableId);
+    }
+    resolveLeases();
+    return lease;
+  };
+
+  function releaseLease(lease) {
+    if (!lease.active) return;
+    lease.active = false;
+    leases.delete(lease);
+    for (const tableId of lease.tables) {
+      const count = (desired.get(tableId) ?? 0) - 1;
+      if (count > 0) {
+        desired.set(tableId, count);
+      } else {
+        desired.delete(tableId);
+        scheduleGraceRelease(tableId);
+      }
+    }
+  }
+
+  return {
+    identity,
+    getState: () => state,
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    connect,
+    disconnect,
+    claim,
+    scheduleSave,
+    saveNow,
+    sendCursor,
+    previewTableMove,
+    markSnapshotApplied(snapshot) {
+      if (!session || !snapshot) return;
+      session.lastApplied = {
+        name: snapshot.name,
+        document: snapshot.document,
+      };
+      if (Number.isInteger(snapshot.version)) {
+        emit({ version: snapshot.version });
+      }
+    },
+    get isJoined() {
+      return joined;
+    },
+    isTableLockedByOther(tableId) {
+      const lock = state.tableLocks[tableId];
+      return Boolean(lock && lock.clientId !== identity.clientId);
+    },
+    getTableLock(tableId) {
+      return state.tableLocks[tableId] ?? null;
+    },
+  };
+}

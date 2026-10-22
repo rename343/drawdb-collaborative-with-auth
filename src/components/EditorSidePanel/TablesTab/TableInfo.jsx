@@ -15,8 +15,8 @@ import {
   useLayout,
   useSaveState,
   useUndoRedo,
-  useCollab,
 } from "../../../hooks";
+import { useCollabStatus, useTableLock } from "../../../collaboration/react";
 import { Action, ObjectType, State, DB } from "../../../data/constants";
 import TableField from "./TableField";
 import IndexDetails from "./IndexDetails";
@@ -39,44 +39,11 @@ export default function TableInfo({ data }) {
   const [editField, setEditField] = useState({});
   const initialColorRef = useRef(data.color);
   const editorRef = useRef(null);
-  const {
-    acquireTableLock,
-    connectionState,
-    hasTableLock,
-    releaseTableLockRetention,
-    releaseTableLocks,
-    retainTableLock,
-    tableLocks,
-  } = useCollab();
+  const { connectionState } = useCollabStatus();
+  const tableLock = useTableLock(data.id);
   const collaborationEnabled = connectionState === "connected";
-  const currentLock = tableLocks[data.id];
-  const canEdit = !collaborationEnabled || hasTableLock(data.id);
-
-  useEffect(() => {
-    if (!collaborationEnabled) {
-      return undefined;
-    }
-    let active = true;
-    retainTableLock(data.id);
-    acquireTableLock(data.id).then((granted) => {
-      if (!active && granted) {
-        releaseTableLockRetention(data.id);
-        releaseTableLocks([data.id]);
-      }
-    });
-    return () => {
-      active = false;
-      releaseTableLockRetention(data.id);
-      releaseTableLocks([data.id]);
-    };
-  }, [
-    acquireTableLock,
-    collaborationEnabled,
-    data.id,
-    releaseTableLockRetention,
-    releaseTableLocks,
-    retainTableLock,
-  ]);
+  const currentLock = tableLock.holder ?? tableLock.lock;
+  const canEdit = !collaborationEnabled || tableLock.isMine;
 
   useEffect(() => {
     if (canEdit || !editorRef.current?.contains(document.activeElement)) return;

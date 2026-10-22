@@ -5,7 +5,7 @@ import {
   defaultNoteTheme,
   noteWidth,
 } from "../data/constants";
-import { useUndoRedo, useTransform, useSelect, useCollab } from "../hooks";
+import { useUndoRedo, useTransform, useSelect } from "../hooks";
 import { Toast } from "@douyinfe/semi-ui";
 import { useTranslation } from "react-i18next";
 
@@ -17,8 +17,6 @@ export default function NotesContextProvider({ children }) {
   const { transform } = useTransform();
   const { setUndoStack, setRedoStack } = useUndoRedo();
   const { selectedElement, setSelectedElement } = useSelect();
-  const { emitDelta, isApplyingRemoteRef } = useCollab();
-  const shouldEmit = () => !isApplyingRemoteRef?.current;
 
   const addNote = (data, addToHistory = true) => {
     let created = data;
@@ -54,14 +52,6 @@ export default function NotesContextProvider({ children }) {
       ]);
       setRedoStack([]);
     }
-    if (shouldEmit() && created) {
-      emitDelta({
-        target: "note",
-        action: "create",
-        entityId: created.id,
-        data: [created],
-      });
-    }
   };
 
   const deleteNote = (id, addToHistory = true) => {
@@ -89,41 +79,21 @@ export default function NotesContextProvider({ children }) {
         open: false,
       }));
     }
-    if (shouldEmit()) {
-      emitDelta({
-        target: "note",
-        action: "delete",
-        entityId: id,
-        data: [id],
-      });
-    }
   };
 
-  const updateNote = useCallback(
-    (id, values) => {
-      setNotes((prev) =>
-        prev.map((t) => {
-          if (t.id === id) {
-            return {
-              ...t,
-              ...values,
-            };
-          }
-          return t;
-        }),
-      );
-      if (shouldEmit()) {
-        emitDelta({
-          target: "note",
-          action: "update",
-          entityId: id,
-          data: [id, values],
-        });
-      }
-    },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [emitDelta],
-  );
+  const updateNote = useCallback((id, values) => {
+    setNotes((prev) =>
+      prev.map((t) => {
+        if (t.id === id) {
+          return {
+            ...t,
+            ...values,
+          };
+        }
+        return t;
+      }),
+    );
+  }, []);
 
   return (
     <NotesContext.Provider

@@ -1,0 +1,403 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { createCollabSession } from "./session.js";
+
+function createMemoryTransport() {
+  let handlers = null;
+  return {
+    sent: [],
+    opened: false,
+    closed: false,
+    open(next) {
+      handlers = next;
+      this.opened = true;
+    },
+    send(raw) {
+      this.sent.push(JSON.parse(raw));
+    },
+    receive(message) {
+      handlers.onMessage(JSON.stringify(message));
+    },
+    serverOpen() {
+      handlers.onOpen();
+    },
+    serverClose() {
+      handlers.onClose();
+    },
+    close() {
+      this.closed = true;
+    },
+  };
+}
+
+function createFakeClock() {
+  let currentTime = 0;
+  let nextId = 0;
+  const timers = new Map();
+  return {
+    now: () => currentTime,
+    setTimeout(callback, delay) {
+      const id = ++nextId;
+      timers.set(id, { at: currentTime + delay, callback });
+      return id;
+    },
+    clearTimeout(id) {
+      timers.delete(id);
+    },
+    advance(ms) {
+      currentTime += ms;
+      for (const [id, timer] of [...timers]) {
+        if (timer.at <= currentTime) {
+          timers.delete(id);
+          timer.callback();
+        }
+      }
+    },
+  };
+}
+
+function createFakeDocument(initial) {
+  return {
+    current: initial,
+    read() {
+      return this.current;
+    },
+    apply(snapshot) {
+      this.current = { name: snapshot.name, document: snapshot.document };
+    },
+    equal(left, right) {
+      return JSON.stringify(left) === JSON.stringify(right);
+    },
+  };
+}
+
+const identity = {
+  clientId: "client-a",
+  displayName: "A",
+  color: "#000",
+};
+
+async function connectSession() {
+  const transport = createMemoryTransport();
+  const clock = createFakeClock();
+  const document = createFakeDocument({
+    name: "Local",
+    document: { tables: [] },
+  });
+  const writer = {
+    writes: [],
+    async write(snapshot) {
+      this.writes.push(snapshot);
+      return { version: 2 };
+    },
+  };
+  const session = createCollabSession({ identity, transport, clock });
+  session.connect({
+    diagramId: "diagram-1",
+    version: 1,
+    document,
+    writer,
+  });
+  transport.serverOpen();
+  transport.receive({ type: "joined", diagramId: "diagram-1", version: 1 });
+  return { session, transport, clock, document, writer };
+}
+
+test("connects, joins and applies remote snapshots", () => {
+  const transport = createMemoryTransport();
+  const clock = createFakeClock();
+  const document = createFakeDocument({
+    name: "Local",
+    document: { tables: [] },
+  });
+  const session = createCollabSession({ identity, transport, clock });
+  const states = [];
+  session.subscribe((state) => states.push(state));
+
+  session.connect({
+    diagramId: "diagram-1",
+    version: 1,
+    document,
+    writer: { write: async () => ({ version: 2 }) },
+  });
+  assert.equal(session.getState().connection, "connecting");
+  assert.equal(transport.opened, true);
+
+  transport.serverOpen();
+  assert.deepEqual(transport.sent[0], {
+    type: "join",
+    diagramId: "diagram-1",
+    participant: identity,
+    lastVersion: 1,
+  });
+
+  transport.receive({ type: "joined", diagramId: "diagram-1", version: 1 });
+  assert.equal(session.getState().connection, "connected");
+
+  transport.receive({
+    type: "snapshot",
+    diagramId: "diagram-1",
+    version: 2,
+    name: "Remote",
+    document: { tables: [{ id: "table-1" }] },
+  });
+  assert.equal(document.current.name, "Remote");
+  assert.deepEqual(document.current.document, {
+    tables: [{ id: "table-1" }],
+  });
+  assert.equal(session.getState().version, 2);
+  assert.ok(states.length > 0);
+});
+
+test("an initial snapshot is not saved back to the server", async () => {
+  const transport = createMemoryTransport();
+  const clock = createFakeClock();
+  const document = createFakeDocument({
+    name: "Loaded",
+    document: { tables: [{ id: "table-1" }] },
+  });
+  const session = createCollabSession({ identity, transport, clock });
+  session.connect({
+    diagramId: "diagram-1",
+    version: 3,
+    document,
+    writer: { write: async () => ({ version: 4 }) },
+    initialSnapshot: {
+      name: "Loaded",
+      document: { tables: [{ id: "table-1" }] },
+    },
+  });
+  transport.serverOpen();
+  transport.receive({ type: "joined", diagramId: "diagram-1", version: 3 });
+
+  const saved = session.scheduleSave();
+  clock.advance(600);
+  await saved;
+  assert.equal(
+    transport.sent.filter((message) => message.type === "operation").length,
+    0,
+  );
+});
+
+test("table claims are refcounted and release after a grace period", async () => {
+  const { session, transport, clock } = await connectSession();
+
+  const first = session.claim(["table-1"]);
+  const acquire = transport.sent.find(
+    (message) => message.type === "table_lock_acquire",
+  );
+  assert.ok(acquire);
+  assert.equal(acquire.tableId, "table-1");
+
+  transport.receive({
+    type: "table_lock_granted",
+    diagramId: "diagram-1",
+    requestId: acquire.requestId,
+    lock: {
+      tableId: "table-1",
+      diagramId: "diagram-1",
+      clientId: identity.clientId,
+      displayName: identity.displayName,
+      color: identity.color,
+      token: 1,
+      expiresAt: 100,
+    },
+  });
+  assert.deepEqual(await first.whenSettled(), { ok: true });
+  assert.equal(
+    session.getState().tableLocks["table-1"].clientId,
+    identity.clientId,
+  );
+
+  const second = session.claim(["table-1"]);
+  assert.equal(
+    transport.sent.filter((m) => m.type === "table_lock_acquire").length,
+    1,
+  );
+
+  first.release();
+  clock.advance(1_999);
+  assert.equal(
+    transport.sent.filter((m) => m.type === "table_lock_release").length,
+    0,
+  );
+
+  second.release();
+  clock.advance(2_000);
+  assert.equal(
+    transport.sent.filter((m) => m.type === "table_lock_release").length,
+    1,
+  );
+  assert.equal(session.getState().tableLocks["table-1"], undefined);
+});
+
+test("a denied table claim reports the blocking participant", async () => {
+  const { session, transport } = await connectSession();
+  const lease = session.claim(["table-1"]);
+  const acquire = transport.sent.find(
+    (message) => message.type === "table_lock_acquire",
+  );
+
+  transport.receive({
+    type: "table_lock_denied",
+    diagramId: "diagram-1",
+    requestId: acquire.requestId,
+    lock: {
+      tableId: "table-1",
+      clientId: "client-b",
+      displayName: "B",
+      color: "#fff",
+      token: 2,
+      expiresAt: 100,
+    },
+  });
+
+  assert.deepEqual(await lease.whenSettled(), {
+    ok: false,
+    blockedBy: "B",
+  });
+  lease.release();
+});
+
+test("table move previews need the lock and are throttled", async () => {
+  const { session, transport, clock } = await connectSession();
+  const lease = session.claim(["table-1"]);
+  const acquire = transport.sent.find(
+    (message) => message.type === "table_lock_acquire",
+  );
+  transport.receive({
+    type: "table_lock_granted",
+    diagramId: "diagram-1",
+    requestId: acquire.requestId,
+    lock: {
+      tableId: "table-1",
+      diagramId: "diagram-1",
+      clientId: identity.clientId,
+      token: 1,
+      expiresAt: 100,
+    },
+  });
+
+  session.previewTableMove("table-1", 10, 20);
+  session.previewTableMove("table-1", 30, 40);
+  assert.equal(
+    transport.sent.filter((message) => message.type === "operation_preview")
+      .length,
+    0,
+  );
+  clock.advance(50);
+  const previews = transport.sent.filter(
+    (message) => message.type === "operation_preview",
+  );
+  assert.equal(previews.length, 1);
+  assert.deepEqual(previews[0].operation.payload, {
+    id: "table-1",
+    x: 30,
+    y: 40,
+  });
+  lease.release();
+});
+
+test("autosave debounces and acknowledges one snapshot", async () => {
+  const { session, transport, clock, document } = await connectSession();
+  document.current = {
+    name: "Local",
+    document: { tables: [{ id: "table-1" }] },
+  };
+
+  const saved = session.scheduleSave();
+  clock.advance(599);
+  assert.equal(
+    transport.sent.filter((message) => message.type === "operation").length,
+    0,
+  );
+  clock.advance(1);
+  const operation = transport.sent.find(
+    (message) => message.type === "operation",
+  );
+  assert.ok(operation);
+  assert.equal(operation.baseVersion, 1);
+  assert.deepEqual(operation.operation.payload, {
+    name: "Local",
+    document: { tables: [{ id: "table-1" }] },
+  });
+
+  transport.receive({
+    type: "operation_applied",
+    diagramId: "diagram-1",
+    clientId: identity.clientId,
+    operationId: operation.operationId,
+    version: 2,
+    operation: operation.operation,
+  });
+  await saved;
+  assert.equal(session.getState().version, 2);
+  assert.equal(session.getState().save.state, "saved");
+});
+
+test("autosave does not echo a remote snapshot back to the server", async () => {
+  const { session, transport, clock } = await connectSession();
+  transport.receive({
+    type: "snapshot",
+    diagramId: "diagram-1",
+    version: 2,
+    name: "Remote",
+    document: { tables: [{ id: "table-1" }] },
+  });
+
+  const saved = session.scheduleSave();
+  clock.advance(600);
+  await saved;
+  assert.equal(
+    transport.sent.filter((message) => message.type === "operation").length,
+    0,
+  );
+  assert.equal(session.getState().save.state, "saved");
+});
+
+test("autosave falls back to the writer while disconnected", async () => {
+  const { session, transport, clock, document, writer } =
+    await connectSession();
+  transport.serverClose();
+  document.current = {
+    name: "Offline",
+    document: { tables: [{ id: "table-1" }] },
+  };
+
+  const saved = session.scheduleSave();
+  clock.advance(600);
+  await saved;
+  assert.equal(writer.writes.length, 1);
+  assert.deepEqual(writer.writes[0], {
+    name: "Offline",
+    document: { tables: [{ id: "table-1" }] },
+    baseVersion: 1,
+  });
+  assert.equal(session.getState().version, 2);
+  assert.equal(session.getState().save.state, "saved");
+});
+
+test("a resync keeps the server snapshot and marks the save as conflict", async () => {
+  const { session, transport, clock, document } = await connectSession();
+  document.current = {
+    name: "Local",
+    document: { tables: [{ id: "table-1" }] },
+  };
+  const saved = session.scheduleSave();
+  clock.advance(600);
+
+  transport.receive({
+    type: "resync_required",
+    diagramId: "diagram-1",
+    version: 3,
+    name: "Server",
+    document: { tables: [{ id: "table-2" }] },
+  });
+  await saved;
+  assert.deepEqual(document.current, {
+    name: "Server",
+    document: { tables: [{ id: "table-2" }] },
+  });
+  assert.equal(session.getState().version, 3);
+  assert.equal(session.getState().save.state, "conflict");
+});

@@ -34,8 +34,8 @@ import {
   useDiagram,
   useSelect,
   useUndoRedo,
-  useCollab,
 } from "../../hooks";
+import { useTableAction, useTableLockState } from "../../collaboration/react";
 import TableInfo from "../EditorSidePanel/TablesTab/TableInfo";
 import { useTranslation } from "react-i18next";
 import { resolveType } from "../../utils/customTypes";
@@ -77,22 +77,12 @@ export default function Table({
     bulkSelectedElements,
     setBulkSelectedElements,
   } = useSelect();
-  const {
-    acquireTableLock,
-    connectionState,
-    hasTableLock,
-    isTableLockedByOther,
-    releaseTableLocks,
-    tableLocks,
-  } = useCollab();
-  const collaborationLock = tableLocks[tableData.id];
-  const lockedByParticipant = isTableLockedByOther(tableData.id);
+  const lock = useTableLockState(tableData.id);
+  const { run } = useTableAction();
+  const collaborationLock = lock.holder;
+  const lockedByParticipant = Boolean(lock.holder);
 
   const runWithTableLock = async (action) => {
-    if (connectionState !== "connected") {
-      action();
-      return;
-    }
     if (lockedByParticipant) {
       Toast.warning(
         t("collaboration_table_lock_denied", {
@@ -102,14 +92,15 @@ export default function Table({
       );
       return;
     }
-    const alreadyOwned = hasTableLock(tableData.id);
-    if (!(await acquireTableLock(tableData.id))) {
-      Toast.warning(t("collaboration_table_lock_unavailable"));
-      return;
-    }
-    action();
-    if (!alreadyOwned) {
-      window.setTimeout(() => releaseTableLocks([tableData.id]), 2_000);
+    const result = await run([tableData.id], action);
+    if (!result.ok) {
+      Toast.warning(
+        result.blockedBy
+          ? t("collaboration_table_lock_denied", {
+              name: result.blockedBy,
+            })
+          : t("collaboration_table_lock_unavailable"),
+      );
     }
   };
 
