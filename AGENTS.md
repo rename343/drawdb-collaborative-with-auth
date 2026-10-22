@@ -10,6 +10,12 @@ milestone.
 
 Local Markdown in `.scratch/`. For issue and spec operations, read `docs/agents/issue-tracker.md`.
 
+### Backlog
+
+Unscheduled items live in `.scratch/backlog/` with a `Status:` line. There is no
+root `TODO`: promote captured work into a ticket, and into a feature directory
+once a spec exists.
+
 ### Triage labels
 
 Use the five canonical triage statuses. When triaging, read `docs/agents/triage-labels.md`.

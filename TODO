@@ -1,6 +1,0 @@
-- poprawić UI logowania aktualnie jest ciemne i jest zły kontrast
-- dodać funkjonalność kółek (disjoint i Overlapping)
-- edytor kodu nie powinien być tylko read-only
-- jest dziwny bug że podświetlają się pola mimo że nikt nie edytuje go
-- Share button - Add a visible **Share** button that quickly copies the current diagram's link
-to the clipboard, using the existing access model.
