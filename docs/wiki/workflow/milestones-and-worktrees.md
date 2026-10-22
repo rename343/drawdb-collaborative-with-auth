@@ -17,12 +17,17 @@ This supersedes the `25adb9d` base-branch line above for current work.
 - `main` = `production` = `dc59115` at 11:42 UTC on 2026-10-22. `25adb9d` is
   historical. Docs, M1 and CI merged through PRs #3, #4, #2 and #5; see the
   [Merge log](merge-log.md).
-- Docs housekeeping is complete. `AGENTS.md`, `TODO`, `docs/agents/`,
-  `docs/wiki/` and `docs/adr/` were committed in `7d7b3ff` (PR #3). The
-  "Housekeeping before the first worktree" section below is historical.
+- Docs housekeeping completed in `7d7b3ff` (PR #3) for `AGENTS.md`,
+  `docs/agents/`, `docs/wiki/` and `docs/adr/`. The root `TODO` was committed
+  there too, then retired on 2026-10-22 in `e854457` (PR #6); open work lives in
+  `.scratch/backlog/issues/` and `.scratch/security/issues/`. The "Housekeeping
+  before the first worktree" section below is historical.
 - `feat/m2-dbml` is stale. It is at `d3a5919` (server diagram edit lock) and was
-  built on the old M1 history (`e1a5375`, `a9d5cb8`, `b6dc23b`), not on
-  `dc59115`. It is unmerged; rebuild it onto `dc59115` before further M2 work.
+  built on the old M1 history (`e1a5375`, `a9d5cb8`, `b6dc23b`), not on current
+  `main`. It is unmerged; rebuild it onto `f1ee606` (2026-10-22) before further
+  M2 work.
+- Later on 2026-10-22, `main` = `production` = `f1ee606` after PRs #6, #7 and
+  #8. See the [Merge log](merge-log.md).
 
 ## Why sequential merging
 

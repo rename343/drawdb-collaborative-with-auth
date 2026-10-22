@@ -26,6 +26,21 @@ Last updated: 2026-10-22.
   `01-server-diagram-lock.md` through `04-verify-m2.md`. See
   [DBML editor](subsystems/dbml-editor.md).
 
+**2026-10-22 (later)**
+
+- The root `TODO` was retired in `e854457` (PR #6). Open work now lives in
+  `.scratch/backlog/issues/` and `.scratch/security/issues/`; `AGENTS.md` and
+  `docs/agents/issue-tracker.md` point there.
+- This wiki was updated in `92d73a6` (PR #7) with the merge log, the security
+  snapshot and the CI record.
+- Dependabot was configured in `f1ee606` (PR #8): weekly grouped npm updates
+  targeting `main`, plus a lockfile-only `npm audit fix` that took `npm audit`
+  from 11 to 2 vulnerabilities. Remaining: 2 moderate `react-router`
+  advisories; the fix is a breaking 7.x major and needs a separate decision.
+- At 12:03 UTC, `main` = `production` = `f1ee606`; Docker run `39774829954`
+  published `:production` and `:f1ee606`. M2 should now be rebuilt onto
+  `f1ee606`.
+
 **2026-10-21 (historical)**
 
 - M1 login theme + share button: implemented on `feat/m1-login-share` in
@@ -62,7 +77,8 @@ Last updated: 2026-10-22.
 
 - [Security backlog (2026-10-22)](backlog/security-2026-10-22.md) — 17 open
   Dependabot and 15 open CodeQL alerts at `dc59115`, with the runtime versus
-  development split.
+  development split. A lockfile fix landed in `f1ee606`; the Dependabot rescan
+  was still pending at 12:03 UTC.
 - [Field highlight bug](incidents/field-highlight-bug.md) — deferred; needs
   reproduction.
 - [User preferences](user-preferences.md) — language, scope boundaries,
@@ -70,5 +86,6 @@ Last updated: 2026-10-22.
 
 ## External sources
 
-- Issue tracker: `.scratch/<feature>/` (see `docs/agents/issue-tracker.md`).
+- Issue tracker: `.scratch/<feature>/`; unscheduled work in `.scratch/backlog/`,
+  security work in `.scratch/security/` (see `docs/agents/issue-tracker.md`).
 - Domain conventions: `docs/agents/domain.md`.

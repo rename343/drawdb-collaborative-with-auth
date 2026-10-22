@@ -1,7 +1,8 @@
 # Field highlight bug (deferred)
 
-Reported in `TODO`: fields appear highlighted even though nobody is editing
-them.
+Reported in the root `TODO` on 2026-10-21 (retired 2026-10-22 in `e854457`):
+fields appear highlighted even though nobody is editing them. Tracked in
+`.scratch/backlog/issues/04-field-highlight-bug.md`.
 
 Status on 2026-10-21: deferred. Do not work on it until a reliable reproduction
 exists.
