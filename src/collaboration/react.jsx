@@ -56,25 +56,10 @@ function tableView(session, state, tableIds) {
       (tableId) =>
         state.tableLocks[tableId]?.clientId === session.identity.clientId,
     );
-  const pending = tableIds.some((tableId) => state.pendingTables[tableId]);
-  const status =
-    state.connection !== "connected"
-      ? "offline"
-      : allMine
-        ? "held"
-        : holder || state.diagramLock
-          ? "blocked"
-          : pending
-            ? "requesting"
-            : "idle";
 
   return {
-    status,
     isMine: allMine,
-    allMine,
     holder,
-    lock: tableIds.length === 1 ? state.tableLocks[tableIds[0]] ?? null : null,
-    tableLocks: state.tableLocks,
   };
 }
 
@@ -127,17 +112,7 @@ export function useTableAction() {
           };
         }
         const lease = session.claim(tableIds);
-        let timeoutId;
-        const result = await Promise.race([
-          lease.whenSettled(),
-          new Promise((resolve) => {
-            timeoutId = globalThis.setTimeout(
-              () => resolve({ ok: false, blockedBy: null }),
-              5_000,
-            );
-          }),
-        ]);
-        globalThis.clearTimeout(timeoutId);
+        const result = await lease.whenSettled();
         try {
           if (!result.ok) return result;
           return { ok: true, value: await action() };

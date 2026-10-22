@@ -240,7 +240,7 @@ export function createCollabSession({
       document: snapshot.document,
       baseVersion: state.version,
     });
-    if (result?.diagram) {
+    if (result?.conflict) {
       session.document.apply(result.diagram, { source: "remote" });
       session.lastApplied = {
         name: result.diagram.name,
@@ -306,6 +306,9 @@ export function createCollabSession({
   };
 
   const scheduleSave = () => {
+    if (state.diagramLock || state.diagramPhase === "requesting") {
+      return Promise.resolve();
+    }
     if (saveTimer !== null) clock.clearTimeout(saveTimer);
     let resolve;
     const promise = new Promise((next) => {
@@ -382,7 +385,7 @@ export function createCollabSession({
     releaseAllTableLocks();
     emit({ diagramPhase: "requesting" });
     const requestId = nanoid();
-    return new Promise((resolve) => {
+    const result = await new Promise((resolve) => {
       const timer = clock.setTimeout(() => {
         if (pendingDiagram?.requestId !== requestId) return;
         pendingDiagram = null;
@@ -396,6 +399,39 @@ export function createCollabSession({
         requestId,
       });
     });
+
+    if (!result.ok || !result.stale) return result;
+    if (!session.reader) {
+      releaseDiagramLock();
+      return { ok: false, reason: "stale", version: result.version };
+    }
+
+    try {
+      const fresh = await session.reader.read();
+      session.document.apply(fresh, { source: "remote" });
+      session.lastApplied = {
+        name: fresh.name,
+        document: fresh.document,
+      };
+      emit({
+        version: fresh.version,
+        save: { ...state.save, state: "saved" },
+      });
+      return {
+        ...result,
+        ok: true,
+        version: fresh.version,
+        stale: false,
+        refreshed: true,
+      };
+    } catch (error) {
+      releaseDiagramLock();
+      return {
+        ok: false,
+        reason: "refresh-failed",
+        message: error.message,
+      };
+    }
   };
 
   const cancelDiagramEdit = () => {
@@ -421,6 +457,11 @@ export function createCollabSession({
     ) {
       return { ok: false, reason: "not-editing" };
     }
+    if (saveTimer !== null) {
+      clock.clearTimeout(saveTimer);
+      saveTimer = null;
+    }
+    if (savePromise) await savePromise;
     try {
       await sendSnapshot(snapshot);
       session.lastApplied = {
@@ -591,7 +632,10 @@ export function createCollabSession({
             diagramBlockedBy: null,
             diagramPhase: "lost",
           });
-        } else if (state.diagramPhase !== "requesting") {
+        } else if (
+          state.diagramPhase !== "requesting" &&
+          state.diagramPhase !== "lost"
+        ) {
           emit({
             diagramLock: null,
             diagramBlockedBy: null,
@@ -600,12 +644,27 @@ export function createCollabSession({
         }
         requestDesiredTables();
       } else if (lock.clientId === identity.clientId) {
-        emit({
-          diagramLock: lock,
-          diagramBlockedBy: null,
-          diagramPhase:
-            state.diagramPhase === "requesting" ? "requesting" : "editing",
-        });
+        if (state.diagramPhase === "lost") {
+          if (joined) {
+            send({
+              type: MESSAGE_TYPES.DIAGRAM_LOCK_RELEASE,
+              diagramId: session.diagramId,
+              token: lock.token,
+            });
+          }
+          emit({
+            diagramLock: null,
+            diagramBlockedBy: null,
+            diagramPhase: "lost",
+          });
+        } else {
+          emit({
+            diagramLock: lock,
+            diagramBlockedBy: null,
+            diagramPhase:
+              state.diagramPhase === "requesting" ? "requesting" : "editing",
+          });
+        }
       } else {
         emit({
           diagramLock: lock,
@@ -659,11 +718,16 @@ export function createCollabSession({
       resolve({
         ok: false,
         reason: message.tableLocks?.length ? "table-locked" : "held",
-        blockedBy:
-          message.lock?.displayName ??
-          message.tableLocks?.[0]?.displayName ??
-          null,
+        blockedBy: message.lock ?? message.tableLocks?.[0] ?? null,
       });
+      return;
+    }
+
+    if (
+      message.type === MESSAGE_TYPES.OPERATION_PREVIEW &&
+      message.clientId !== identity.clientId
+    ) {
+      session?.document.applyPreview?.(message.operation);
       return;
     }
 
@@ -709,6 +773,11 @@ export function createCollabSession({
   };
 
   const clearTransientLocks = () => {
+    for (const lease of leases) {
+      if (lease.settled) continue;
+      lease.settled = true;
+      lease.resolve({ ok: false, blockedBy: null });
+    }
     held.clear();
     pending.clear();
     pendingByTable.clear();
@@ -759,6 +828,7 @@ export function createCollabSession({
     version,
     document,
     writer,
+    reader = null,
     initialSnapshot = null,
   }) => {
     clock.clearTimeout(reconnectTimer);
@@ -769,7 +839,13 @@ export function createCollabSession({
     savePromise = null;
     session = null;
     transport.close();
-    session = { diagramId, document, writer, lastApplied: initialSnapshot };
+    session = {
+      diagramId,
+      document,
+      writer,
+      reader,
+      lastApplied: initialSnapshot,
+    };
     joined = false;
     reconnectAttempts = 0;
     clearTransientLocks();

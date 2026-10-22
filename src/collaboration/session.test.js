@@ -59,11 +59,15 @@ function createFakeClock() {
 function createFakeDocument(initial) {
   return {
     current: initial,
+    previews: [],
     read() {
       return this.current;
     },
     apply(snapshot) {
       this.current = { name: snapshot.name, document: snapshot.document };
+    },
+    applyPreview(operation) {
+      this.previews.push(operation);
     },
     equal(left, right) {
       return JSON.stringify(left) === JSON.stringify(right);
@@ -79,7 +83,7 @@ const identity = {
 
 const tick = () => new Promise((resolve) => globalThis.setTimeout(resolve, 0));
 
-async function connectSession() {
+async function connectSession({ reader = null } = {}) {
   const transport = createMemoryTransport();
   const clock = createFakeClock();
   const document = createFakeDocument({
@@ -99,6 +103,7 @@ async function connectSession() {
     version: 1,
     document,
     writer,
+    reader,
     initialSnapshot: document.current,
   });
   transport.serverOpen();
@@ -150,6 +155,20 @@ test("connects, joins and applies remote snapshots", () => {
   });
   assert.equal(session.getState().version, 2);
   assert.ok(states.length > 0);
+
+  transport.receive({
+    type: "operation_preview",
+    diagramId: "diagram-1",
+    clientId: "client-b",
+    operation: {
+      type: "table.move",
+      payload: { id: "table-1", x: 30, y: 40 },
+    },
+  });
+  assert.deepEqual(document.previews[0], {
+    type: "table.move",
+    payload: { id: "table-1", x: 30, y: 40 },
+  });
 });
 
 test("an initial snapshot is not saved back to the server", async () => {
@@ -182,7 +201,7 @@ test("an initial snapshot is not saved back to the server", async () => {
   );
 });
 
-test("table claims are refcounted and release after a grace period", async () => {
+test("Table locks are refcounted and release after a grace period", async () => {
   const { session, transport, clock } = await connectSession();
 
   const first = session.claim(["table-1"]);
@@ -234,7 +253,7 @@ test("table claims are refcounted and release after a grace period", async () =>
   assert.equal(session.getState().tableLocks["table-1"], undefined);
 });
 
-test("a denied table claim reports the blocking participant", async () => {
+test("a denied Table lock reports the blocking participant", async () => {
   const { session, transport } = await connectSession();
   const lease = session.claim(["table-1"]);
   const acquire = transport.sent.find(
@@ -380,8 +399,8 @@ test("autosave falls back to the writer while disconnected", async () => {
   assert.equal(session.getState().save.state, "saved");
 });
 
-test("diagram edit flushes, drops table locks, commits then releases", async () => {
-  const { session, transport, document } = await connectSession();
+test("Diagram edit lock flushes, drops Table locks, commits then releases", async () => {
+  const { session, transport, clock, document } = await connectSession();
   const tableLease = session.claim(["table-1"]);
   const tableAcquire = transport.sent.find(
     (message) => message.type === "table_lock_acquire",
@@ -458,6 +477,22 @@ test("diagram edit flushes, drops table locks, commits then releases", async () 
   });
   assert.equal(session.getState().diagramPhase, "editing");
 
+  document.current = {
+    name: "GUI edit while locked",
+    document: { tables: [] },
+  };
+  const suppressed = session.scheduleSave();
+  clock.advance(600);
+  await suppressed;
+  assert.equal(
+    transport.sent.filter(
+      (message) =>
+        message.type === "operation" &&
+        message.operation.payload.name === "GUI edit while locked",
+    ).length,
+    0,
+  );
+
   const commitPromise = session.commitDiagramEdit({
     name: "Applied",
     document: { tables: [] },
@@ -485,7 +520,7 @@ test("diagram edit flushes, drops table locks, commits then releases", async () 
   tableLease.release();
 });
 
-test("diagram edit denial blocks table claims and loss is not retried", async () => {
+test("Diagram edit lock denial blocks Table locks and loss is not retried", async () => {
   const { session, transport } = await connectSession();
   const beginPromise = session.beginDiagramEdit();
   await tick();
@@ -504,11 +539,10 @@ test("diagram edit denial blocks table claims and loss is not retried", async ()
       expiresAt: 999,
     },
   });
-  assert.deepEqual(await beginPromise, {
-    ok: false,
-    reason: "held",
-    blockedBy: "B",
-  });
+  const denied = await beginPromise;
+  assert.equal(denied.ok, false);
+  assert.equal(denied.reason, "held");
+  assert.equal(denied.blockedBy.displayName, "B");
   assert.equal(session.getState().diagramPhase, "blocked");
 
   const tableAcquires = transport.sent.filter(
@@ -562,6 +596,81 @@ test("diagram edit denial blocks table claims and loss is not retried", async ()
       .length,
     acquireCount,
   );
+
+  transport.receive({
+    type: "diagram_lock_state",
+    diagramId: "diagram-1",
+    lock: null,
+  });
+  assert.equal(session.getState().diagramPhase, "lost");
+});
+
+test("re-entering edit mode refreshes a stale snapshot", async () => {
+  const reader = {
+    async read() {
+      return {
+        name: "Fresh",
+        document: { tables: [{ id: "fresh" }] },
+        version: 2,
+      };
+    },
+  };
+  const { session, transport, document } = await connectSession({ reader });
+  const beginPromise = session.beginDiagramEdit();
+  await tick();
+  const acquire = transport.sent.find(
+    (message) => message.type === "diagram_lock_acquire",
+  );
+  transport.receive({
+    type: "diagram_lock_granted",
+    diagramId: "diagram-1",
+    requestId: acquire.requestId,
+    version: 2,
+    lock: {
+      diagramId: "diagram-1",
+      clientId: identity.clientId,
+      token: 11,
+      expiresAt: 999,
+    },
+  });
+  const begin = await beginPromise;
+  assert.equal(begin.ok, true);
+  assert.equal(begin.version, 2);
+  assert.equal(begin.refreshed, true);
+  assert.deepEqual(document.current, {
+    name: "Fresh",
+    document: { tables: [{ id: "fresh" }] },
+  });
+  assert.equal(session.getState().version, 2);
+});
+
+test("an offline writer conflict applies the server snapshot", async () => {
+  const { session, transport, clock, document, writer } =
+    await connectSession();
+  transport.serverClose();
+  document.current = {
+    name: "Offline",
+    document: { tables: [{ id: "table-1" }] },
+  };
+  writer.write = async () => ({
+    conflict: true,
+    version: 5,
+    diagram: {
+      name: "Server",
+      document: { tables: [{ id: "table-2" }] },
+      version: 5,
+    },
+  });
+
+  const saved = session.scheduleSave();
+  clock.advance(600);
+  await saved;
+  assert.deepEqual(document.current, {
+    name: "Server",
+    document: { tables: [{ id: "table-2" }] },
+  });
+  assert.equal(session.getState().version, 5);
+  assert.equal(session.getState().save.state, "conflict");
 });
 
 test("a resync keeps the server snapshot and marks the save as conflict", async () => {
