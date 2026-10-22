@@ -47,6 +47,27 @@ At 11:42 UTC on 2026-10-22, `main` = `production` = `dc59115`.
 The Actions permission failure that preceded these runs is recorded in
 [Verification](../testing/verification.md).
 
+## 2026-10-22 — trackers and dependencies to `f1ee606`
+
+| Order | PR | Source branch | Merge commit | Time (UTC) | Method |
+| ----- | -- | ------------- | ------------ | ---------- | ------ |
+| 5 | [#6](https://github.com/rename343/drawdb-collaborative-with-auth/pull/6) | `chore/retire-todo` | `e854457` | 11:56 | GitHub merge |
+| 6 | [#7](https://github.com/rename343/drawdb-collaborative-with-auth/pull/7) | `docs/wiki-2026-10-22` | `92d73a6` | 11:58 | GitHub merge |
+| 7 | [#8](https://github.com/rename343/drawdb-collaborative-with-auth/pull/8) | `chore/dependabot-config` | `f1ee606` | 11:59 | GitHub merge |
+
+- PR #6 retired the root `TODO`; its open items moved to
+  `.scratch/backlog/issues/` and `.scratch/security/issues/`.
+- PR #7 added this merge log, the security snapshot and the CI record.
+- PR #8 added `.github/dependabot.yml` and a lockfile-only `npm audit fix`.
+  `npm audit` went from 11 to 2 vulnerabilities; 2 moderate `react-router`
+  advisories remain and need a breaking-major decision.
+- PRs #6 and #7 were docs-only and did not move `production`. PR #8 did:
+  `production` went from `dc59115` to `f1ee606`, and Docker run
+  [39774829954](https://github.com/rename343/drawdb-collaborative-with-auth/actions/runs/39774829954)
+  published `:production` and `:f1ee606`.
+- At 12:03 UTC, `main` = `production` = `f1ee606`. Dependabot still reported 17
+  open alerts at that time; its rescan of the new lockfile was pending.
+
 ## Sources
 
 - Pull requests [#2](https://github.com/rename343/drawdb-collaborative-with-auth/pull/2),
