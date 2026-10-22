@@ -8,8 +8,8 @@ import test from "node:test";
 import { WebSocket } from "ws";
 import { createDiagramStore, openDatabase } from "./database.js";
 import { createApplication } from "./index.js";
+import { createLockRegistry } from "./lockRegistry.js";
 import { isValidOperationPreview } from "./protocol.js";
-import { createTableLockManager } from "./tableLocks.js";
 
 /* global process */
 
@@ -119,6 +119,19 @@ async function createUsers(port, usernames) {
   return cookies;
 }
 
+async function joinDiagram(socket, diagramId, clientId, lastVersion = 1) {
+  const joined = waitForMessage(socket, (message) => message.type === "joined");
+  socket.send(
+    JSON.stringify({
+      type: "join",
+      diagramId,
+      lastVersion,
+      participant: { clientId, displayName: clientId, color: "#000" },
+    }),
+  );
+  await joined;
+}
+
 test("diagram persistence enforces optimistic versions and operation IDs", () => {
   const database = openDatabase(":memory:");
   const store = createDiagramStore(database);
@@ -191,41 +204,6 @@ test("validates ephemeral table movement previews", () => {
     }),
     false,
   );
-});
-
-test("table edit leases are exclusive and expire", () => {
-  let currentTime = 1_000;
-  const locks = createTableLockManager({
-    leaseMs: 100,
-    now: () => currentTime,
-  });
-  const participantA = {
-    clientId: "client-a",
-    displayName: "A",
-    color: "#000",
-  };
-  const participantB = {
-    clientId: "client-b",
-    displayName: "B",
-    color: "#fff",
-  };
-
-  const acquired = locks.acquire("diagram-1", "table-1", participantA);
-  assert.equal(acquired.granted, true);
-  assert.equal(locks.owns("diagram-1", "table-1", "client-a"), true);
-
-  const denied = locks.acquire("diagram-1", "table-1", participantB);
-  assert.equal(denied.granted, false);
-  assert.equal(denied.lock.clientId, "client-a");
-
-  currentTime += 101;
-  const acquiredAfterExpiry = locks.acquire(
-    "diagram-1",
-    "table-1",
-    participantB,
-  );
-  assert.equal(acquiredAfterExpiry.granted, true);
-  assert.notEqual(acquiredAfterExpiry.lock.token, acquired.lock.token);
 });
 
 test("WebSocket table locks reject concurrent edits", async (t) => {
@@ -339,6 +317,396 @@ test("WebSocket table locks reject concurrent edits", async (t) => {
     }),
   );
   assert.equal((await grantedB).lock.clientId, "client-b");
+});
+
+test("WebSocket diagram locks enforce exclusive DBML editing", async (t) => {
+  const application = createTestApplication({ databasePath: ":memory:" });
+  const diagramId = "diagram-edit-lock";
+  application.store.create({
+    id: diagramId,
+    name: "Edit lock test",
+    document: { tables: [] },
+  });
+  const port = await listen(application);
+  const url = `ws://127.0.0.1:${port}/ws/diagrams/${diagramId}`;
+  const cookies = await createUsers(port, ["client-a", "client-b"]);
+  const clientA = await openSocket(url, cookies["client-a"]);
+  const clientB = await openSocket(url, cookies["client-b"]);
+  t.after(() => {
+    clientA.close();
+    clientB.close();
+    application.websocket.close();
+    application.server.close();
+    application.database.close();
+  });
+
+  await joinDiagram(clientA, diagramId, "client-a");
+  await joinDiagram(clientB, diagramId, "client-b");
+
+  const grantedA = waitForMessage(
+    clientA,
+    (message) => message.type === "diagram_lock_granted",
+  );
+  const stateB = waitForMessage(
+    clientB,
+    (message) =>
+      message.type === "diagram_lock_state" &&
+      message.lock?.clientId === "client-a",
+  );
+  clientA.send(
+    JSON.stringify({
+      type: "diagram_lock_acquire",
+      diagramId,
+      requestId: "diagram-request-a",
+    }),
+  );
+  const lockA = (await grantedA).lock;
+  await stateB;
+
+  const rejectedB = waitForMessage(
+    clientB,
+    (message) =>
+      message.type === "error" &&
+      message.message === "Diagram is locked for DBML editing",
+  );
+  clientB.send(
+    JSON.stringify({
+      type: "operation",
+      diagramId,
+      clientId: "client-b",
+      operationId: "operation-b",
+      baseVersion: 1,
+      operation: {
+        type: "snapshot.replace",
+        payload: { name: "B", document: { tables: [] } },
+      },
+    }),
+  );
+  await rejectedB;
+  assert.equal(application.store.get(diagramId).version, 1);
+
+  const appliedA = waitForMessage(
+    clientA,
+    (message) =>
+      message.type === "operation_applied" &&
+      message.operationId === "operation-a",
+  );
+  clientA.send(
+    JSON.stringify({
+      type: "operation",
+      diagramId,
+      clientId: "client-a",
+      operationId: "operation-a",
+      baseVersion: 1,
+      operation: {
+        type: "snapshot.replace",
+        payload: { name: "A", document: { tables: [] } },
+      },
+    }),
+  );
+  await appliedA;
+  assert.equal(application.store.get(diagramId).version, 2);
+
+  const releasedB = waitForMessage(
+    clientB,
+    (message) => message.type === "diagram_lock_state" && message.lock === null,
+  );
+  clientA.send(
+    JSON.stringify({
+      type: "diagram_lock_release",
+      diagramId,
+      token: lockA.token,
+    }),
+  );
+  await releasedB;
+
+  const grantedB = waitForMessage(
+    clientB,
+    (message) => message.type === "diagram_lock_granted",
+  );
+  clientB.send(
+    JSON.stringify({
+      type: "diagram_lock_acquire",
+      diagramId,
+      requestId: "diagram-request-b",
+    }),
+  );
+  assert.equal((await grantedB).lock.clientId, "client-b");
+});
+
+test("diagram and table locks exclude each other over WebSocket", async (t) => {
+  const application = createTestApplication({ databasePath: ":memory:" });
+  const diagramId = "diagram-lock-interplay";
+  application.store.create({
+    id: diagramId,
+    name: "Lock interplay",
+    document: { tables: [{ id: 0, x: 0, y: 0 }] },
+  });
+  const port = await listen(application);
+  const url = `ws://127.0.0.1:${port}/ws/diagrams/${diagramId}`;
+  const cookies = await createUsers(port, ["client-a", "client-b"]);
+  const clientA = await openSocket(url, cookies["client-a"]);
+  const clientB = await openSocket(url, cookies["client-b"]);
+  t.after(() => {
+    clientA.close();
+    clientB.close();
+    application.websocket.close();
+    application.server.close();
+    application.database.close();
+  });
+
+  await joinDiagram(clientA, diagramId, "client-a");
+  await joinDiagram(clientB, diagramId, "client-b");
+
+  const tableB = waitForMessage(
+    clientB,
+    (message) => message.type === "table_lock_granted",
+  );
+  clientB.send(
+    JSON.stringify({
+      type: "table_lock_acquire",
+      diagramId,
+      tableId: 0,
+      requestId: "table-request-b",
+    }),
+  );
+  const tableLockB = (await tableB).lock;
+
+  const deniedDiagramA = waitForMessage(
+    clientA,
+    (message) => message.type === "diagram_lock_denied",
+  );
+  clientA.send(
+    JSON.stringify({
+      type: "diagram_lock_acquire",
+      diagramId,
+      requestId: "diagram-request-a",
+    }),
+  );
+  assert.equal((await deniedDiagramA).tableLocks[0].clientId, "client-b");
+
+  const tableReleased = waitForMessage(
+    clientA,
+    (message) =>
+      message.type === "table_lock_state" && message.locks.length === 0,
+  );
+  clientB.send(
+    JSON.stringify({
+      type: "table_lock_release",
+      diagramId,
+      tableId: 0,
+      token: tableLockB.token,
+    }),
+  );
+  await tableReleased;
+
+  const grantedA = waitForMessage(
+    clientA,
+    (message) => message.type === "diagram_lock_granted",
+  );
+  clientA.send(
+    JSON.stringify({
+      type: "diagram_lock_acquire",
+      diagramId,
+      requestId: "diagram-request-a-retry",
+    }),
+  );
+  const lockA = (await grantedA).lock;
+  assert.equal(typeof lockA.token, "number");
+
+  const deniedTableB = waitForMessage(
+    clientB,
+    (message) => message.type === "table_lock_denied",
+  );
+  clientB.send(
+    JSON.stringify({
+      type: "table_lock_acquire",
+      diagramId,
+      tableId: 0,
+      requestId: "table-request-b-after-diagram",
+    }),
+  );
+  assert.equal((await deniedTableB).diagramLock.clientId, "client-a");
+
+  const releasedState = waitForMessage(
+    clientB,
+    (message) => message.type === "diagram_lock_state" && message.lock === null,
+  );
+  clientA.close();
+  await releasedState;
+});
+
+test("WebSocket rejects duplicate client IDs in one diagram", async (t) => {
+  const application = createTestApplication({ databasePath: ":memory:" });
+  const diagramId = "diagram-client-id";
+  application.store.create({
+    id: diagramId,
+    name: "Client ID test",
+    document: { tables: [] },
+  });
+  const port = await listen(application);
+  const url = `ws://127.0.0.1:${port}/ws/diagrams/${diagramId}`;
+  const cookies = await createUsers(port, ["client-a", "client-b"]);
+  const clientA = await openSocket(url, cookies["client-a"]);
+  const clientB = await openSocket(url, cookies["client-b"]);
+  t.after(() => {
+    clientA.close();
+    clientB.close();
+    application.websocket.close();
+    application.server.close();
+    application.database.close();
+  });
+
+  await joinDiagram(clientA, diagramId, "shared-client");
+
+  const duplicate = waitForMessage(
+    clientB,
+    (message) =>
+      message.type === "error" &&
+      message.message === "Client ID is already in use",
+  );
+  clientB.send(
+    JSON.stringify({
+      type: "join",
+      diagramId,
+      lastVersion: 1,
+      participant: {
+        clientId: "shared-client",
+        displayName: "client-b",
+        color: "#000",
+      },
+    }),
+  );
+  await duplicate;
+
+  await joinDiagram(clientB, diagramId, "client-b");
+
+  const changed = waitForMessage(
+    clientA,
+    (message) =>
+      message.type === "error" &&
+      message.message === "Client ID cannot change after joining",
+  );
+  clientA.send(
+    JSON.stringify({
+      type: "join",
+      diagramId,
+      lastVersion: 1,
+      participant: {
+        clientId: "another-client",
+        displayName: "client-a",
+        color: "#000",
+      },
+    }),
+  );
+  await changed;
+});
+
+test("Git pull is rejected before fetching while a diagram lock is held", async (t) => {
+  const locks = createLockRegistry();
+  const application = createTestApplication({
+    databasePath: ":memory:",
+    lockRegistry: locks,
+  });
+  const diagramId = "diagram-git-lock";
+  application.store.create({
+    id: diagramId,
+    name: "Git lock test",
+    document: { tables: [] },
+  });
+  const port = await listen(application);
+  t.after(() => {
+    application.websocket.close();
+    application.server.close();
+    application.database.close();
+  });
+  const cookie = await registerAdmin(port, "git-lock-user");
+  locks.acquire({
+    diagramId,
+    holder: { clientId: "client-a", displayName: "A", color: "#000" },
+    claim: { kind: "diagram" },
+  });
+
+  const response = await fetch(
+    `http://127.0.0.1:${port}/api/diagrams/${diagramId}/git/pull`,
+    { method: "POST", headers: { Cookie: cookie } },
+  );
+  assert.equal(response.status, 423);
+  assert.equal((await response.json()).lock.clientId, "client-a");
+});
+
+test("HTTP snapshot writes are rejected while a diagram lock is held", async (t) => {
+  const application = createTestApplication({ databasePath: ":memory:" });
+  const diagramId = "diagram-http-lock";
+  application.store.create({
+    id: diagramId,
+    name: "HTTP lock test",
+    document: { tables: [] },
+  });
+  const port = await listen(application);
+  const url = `ws://127.0.0.1:${port}/ws/diagrams/${diagramId}`;
+  const cookies = await createUsers(port, ["client-a"]);
+  const clientA = await openSocket(url, cookies["client-a"]);
+  t.after(() => {
+    clientA.close();
+    application.websocket.close();
+    application.server.close();
+    application.database.close();
+  });
+  await joinDiagram(clientA, diagramId, "client-a");
+
+  const granted = waitForMessage(
+    clientA,
+    (message) => message.type === "diagram_lock_granted",
+  );
+  clientA.send(
+    JSON.stringify({
+      type: "diagram_lock_acquire",
+      diagramId,
+      requestId: "diagram-request-http",
+    }),
+  );
+  const lock = (await granted).lock;
+
+  const body = JSON.stringify({
+    name: "Blocked",
+    document: { tables: [] },
+    baseVersion: 1,
+  });
+  const denied = await fetch(
+    `http://127.0.0.1:${port}/api/diagrams/${diagramId}`,
+    {
+      method: "PUT",
+      headers: { ...JSON_HEADERS, Cookie: cookies["client-a"] },
+      body,
+    },
+  );
+  assert.equal(denied.status, 423);
+  assert.equal((await denied.json()).lock.clientId, "client-a");
+
+  const released = waitForMessage(
+    clientA,
+    (message) => message.type === "diagram_lock_state" && message.lock === null,
+  );
+  clientA.send(
+    JSON.stringify({
+      type: "diagram_lock_release",
+      diagramId,
+      token: lock.token,
+    }),
+  );
+  await released;
+
+  const allowed = await fetch(
+    `http://127.0.0.1:${port}/api/diagrams/${diagramId}`,
+    {
+      method: "PUT",
+      headers: { ...JSON_HEADERS, Cookie: cookies["client-a"] },
+      body,
+    },
+  );
+  assert.equal(allowed.status, 200);
+  assert.equal(application.store.get(diagramId).version, 2);
 });
 
 test("diagram endpoints reject unauthenticated callers", async (t) => {
