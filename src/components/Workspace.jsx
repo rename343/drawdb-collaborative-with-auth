@@ -428,7 +428,9 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
     } else if (["conflict", "error", "offline"].includes(next)) {
       setSaveState(State.ERROR);
     }
-  }, [collabState.save.state, setSaveState]);
+    // Depend on the whole object: a repeated "saved" acknowledgement still
+    // needs to clear a local SAVING state, e.g. after a DBML Apply.
+  }, [collabState.save, setSaveState]);
 
   useEffect(() => {
     document.title = "Editor | drawDB";
