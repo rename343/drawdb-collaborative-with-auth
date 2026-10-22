@@ -2,7 +2,7 @@ import { Collapse, Button, Popover } from "@douyinfe/semi-ui";
 import { IconPlus, IconInfoCircle } from "@douyinfe/semi-icons";
 import { useSelect, useDiagram, useTypes, useLayout } from "../../../hooks";
 import { DB, ObjectType } from "../../../data/constants";
-import Searchbar from "./SearchBar";
+import { SearchBar } from "../SearchBar";
 import Empty from "../Empty";
 import TypeInfo from "./TypeInfo";
 import { useTranslation } from "react-i18next";
@@ -17,7 +17,18 @@ export default function TypesTab() {
   return (
     <>
       <div className="flex gap-2">
-        <Searchbar />
+        <SearchBar
+          items={types}
+          scrollId={(type) => `scroll_type_${types.indexOf(type)}`}
+          onSelect={(type) =>
+            setSelectedElement((prev) => ({
+              ...prev,
+              id: types.indexOf(type),
+              open: true,
+              element: ObjectType.TYPE,
+            }))
+          }
+        />
         <div>
           <Button
             block

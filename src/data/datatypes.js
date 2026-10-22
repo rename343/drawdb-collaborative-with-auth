@@ -1,4 +1,4 @@
-import { strHasQuotes } from "../utils/utils";
+import { strHasQuotes } from "../utils/utils.js";
 import {
   binaryColor,
   booleanColor,
@@ -12,8 +12,8 @@ import {
   otherColor,
   stringColor,
   vectorColor,
-} from "./constants";
-import { DB } from "./constants";
+} from "./constants.js";
+import { DB } from "./constants.js";
 
 const intRegex = /^-?\d*$/;
 const doubleRegex = /^-?\d*.?\d+$/;

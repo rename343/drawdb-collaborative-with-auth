@@ -1,10 +1,10 @@
-import { dbToTypes } from "../data/datatypes";
+import { dbToTypes } from "../data/datatypes.js";
 
 import {
   tableFieldHeight,
   tableHeaderHeight,
   tableColorStripHeight,
-} from "../data/constants";
+} from "../data/constants.js";
 
 export function dataURItoBlob(dataUrl) {
   const byteString = atob(dataUrl.split(",")[1]);
@@ -162,10 +162,7 @@ export function getFieldHeight(field, containerWidth, showComments = true) {
 }
 
 export function getRelationshipFields(relationship) {
-  if (
-    Array.isArray(relationship?.fields) &&
-    relationship.fields.length > 0
-  ) {
+  if (Array.isArray(relationship?.fields) && relationship.fields.length > 0) {
     return relationship.fields;
   }
   return [

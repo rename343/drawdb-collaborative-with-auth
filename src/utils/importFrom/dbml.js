@@ -1,5 +1,5 @@
 import { Parser } from "@dbml/core";
-import { arrangeTables } from "../arrangeTables";
+import { arrangeTables } from "../autoLayout/index.js";
 import { Cardinality, Constraint } from "../../data/constants";
 import { nanoid } from "nanoid";
 

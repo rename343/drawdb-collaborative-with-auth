@@ -2,7 +2,7 @@ import { Button, Collapse } from "@douyinfe/semi-ui";
 import { IconPlus } from "@douyinfe/semi-icons";
 import { useLayout, useNotes, useSelect } from "../../../hooks";
 import Empty from "../Empty";
-import SearchBar from "./SearchBar";
+import { SearchBar } from "../SearchBar";
 import NoteInfo from "./NoteInfo";
 import { useTranslation } from "react-i18next";
 
@@ -16,11 +16,11 @@ export default function NotesTab() {
     <>
       <div className="flex gap-2">
         <SearchBar
-          setActiveKey={(activeKey) =>
-            setSelectedElement((prev) => ({
-              ...prev,
-              id: parseInt(activeKey),
-            }))
+          items={notes}
+          labelKey="title"
+          scrollId={(note) => `scroll_note_${note.id}`}
+          onSelect={(note) =>
+            setSelectedElement((prev) => ({ ...prev, id: note.id }))
           }
         />
         <div>

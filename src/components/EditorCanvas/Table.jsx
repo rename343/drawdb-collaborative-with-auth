@@ -39,7 +39,7 @@ import {
 import TableInfo from "../EditorSidePanel/TablesTab/TableInfo";
 import { useTranslation } from "react-i18next";
 import { resolveType } from "../../utils/customTypes";
-import { isRtl } from "../../i18n/utils/rtl";
+import { isRtl } from "../../i18n/languages";
 import i18n from "../../i18n/i18n";
 import {
   getCommentHeight,

@@ -1,5 +1,5 @@
 import { DB } from "../../data/constants";
-import { arrangeTables } from "../arrangeTables";
+import { arrangeTables } from "../autoLayout/index.js";
 import { fromMariaDB } from "./mariadb";
 import { fromMSSQL } from "./mssql";
 import { fromMySQL } from "./mysql";

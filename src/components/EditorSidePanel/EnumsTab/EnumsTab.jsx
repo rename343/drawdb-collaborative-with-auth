@@ -2,7 +2,7 @@ import { Button, Collapse } from "@douyinfe/semi-ui";
 import { useEnums, useLayout } from "../../../hooks";
 import { IconPlus } from "@douyinfe/semi-icons";
 import { useTranslation } from "react-i18next";
-import SearchBar from "./SearchBar";
+import { SearchBar } from "../SearchBar";
 import EnumDetails from "./EnumDetails";
 import Empty from "../Empty";
 
@@ -14,7 +14,7 @@ export default function EnumsTab() {
   return (
     <div>
       <div className="flex gap-2">
-        <SearchBar />
+        <SearchBar items={enums} scrollId={(e) => `scroll_enum_${e.id}`} />
         <div>
           <Button
             block

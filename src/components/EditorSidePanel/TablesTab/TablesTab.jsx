@@ -13,7 +13,7 @@ import { Action, ObjectType, State } from "../../../data/constants";
 import { useTranslation } from "react-i18next";
 import { DragHandle } from "../../SortableList/DragHandle";
 import { SortableList } from "../../SortableList/SortableList";
-import SearchBar from "./SearchBar";
+import { TableSearchBar } from "../SearchBar";
 import Empty from "../Empty";
 import TableInfo from "./TableInfo";
 
@@ -27,7 +27,7 @@ export default function TablesTab() {
   return (
     <>
       <div className="flex gap-2">
-        <SearchBar tables={tables} />
+        <TableSearchBar tables={tables} />
         <div>
           <Button
             block
