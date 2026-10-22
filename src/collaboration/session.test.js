@@ -77,6 +77,8 @@ const identity = {
   color: "#000",
 };
 
+const tick = () => new Promise((resolve) => globalThis.setTimeout(resolve, 0));
+
 async function connectSession() {
   const transport = createMemoryTransport();
   const clock = createFakeClock();
@@ -97,6 +99,7 @@ async function connectSession() {
     version: 1,
     document,
     writer,
+    initialSnapshot: document.current,
   });
   transport.serverOpen();
   transport.receive({ type: "joined", diagramId: "diagram-1", version: 1 });
@@ -375,6 +378,190 @@ test("autosave falls back to the writer while disconnected", async () => {
   });
   assert.equal(session.getState().version, 2);
   assert.equal(session.getState().save.state, "saved");
+});
+
+test("diagram edit flushes, drops table locks, commits then releases", async () => {
+  const { session, transport, document } = await connectSession();
+  const tableLease = session.claim(["table-1"]);
+  const tableAcquire = transport.sent.find(
+    (message) => message.type === "table_lock_acquire",
+  );
+  transport.receive({
+    type: "table_lock_granted",
+    diagramId: "diagram-1",
+    requestId: tableAcquire.requestId,
+    lock: {
+      tableId: "table-1",
+      diagramId: "diagram-1",
+      clientId: identity.clientId,
+      token: 1,
+      expiresAt: 100,
+    },
+  });
+  await tableLease.whenSettled();
+
+  document.current = {
+    name: "Local edit",
+    document: { tables: [{ id: "table-1" }] },
+  };
+  const beginPromise = session.beginDiagramEdit();
+  await tick();
+  const save = transport.sent.find((message) => message.type === "operation");
+  assert.ok(save);
+  transport.receive({
+    type: "operation_applied",
+    diagramId: "diagram-1",
+    clientId: identity.clientId,
+    operationId: save.operationId,
+    version: 2,
+    operation: save.operation,
+  });
+  await tick();
+
+  const diagramAcquire = transport.sent.find(
+    (message) => message.type === "diagram_lock_acquire",
+  );
+  assert.ok(diagramAcquire);
+  const releaseIndex = transport.sent.findIndex(
+    (message) => message.type === "table_lock_release",
+  );
+  const acquireIndex = transport.sent.findIndex(
+    (message) => message.type === "diagram_lock_acquire",
+  );
+  assert.ok(releaseIndex >= 0);
+  assert.ok(releaseIndex < acquireIndex);
+
+  transport.receive({
+    type: "diagram_lock_granted",
+    diagramId: "diagram-1",
+    requestId: diagramAcquire.requestId,
+    version: 2,
+    lock: {
+      diagramId: "diagram-1",
+      clientId: identity.clientId,
+      displayName: identity.displayName,
+      token: 9,
+      expiresAt: 999,
+    },
+  });
+  assert.deepEqual(await beginPromise, {
+    ok: true,
+    lock: {
+      diagramId: "diagram-1",
+      clientId: identity.clientId,
+      displayName: identity.displayName,
+      token: 9,
+      expiresAt: 999,
+    },
+    version: 2,
+    stale: false,
+  });
+  assert.equal(session.getState().diagramPhase, "editing");
+
+  const commitPromise = session.commitDiagramEdit({
+    name: "Applied",
+    document: { tables: [] },
+  });
+  await tick();
+  const commit = [...transport.sent]
+    .reverse()
+    .find((message) => message.type === "operation");
+  assert.equal(commit.operation.payload.name, "Applied");
+  transport.receive({
+    type: "operation_applied",
+    diagramId: "diagram-1",
+    clientId: identity.clientId,
+    operationId: commit.operationId,
+    version: 3,
+    operation: commit.operation,
+  });
+  assert.deepEqual(await commitPromise, { ok: true, version: 3 });
+  assert.equal(session.getState().diagramPhase, "idle");
+  assert.equal(session.getState().diagramLock, null);
+  const release = transport.sent.find(
+    (message) => message.type === "diagram_lock_release",
+  );
+  assert.equal(release.token, 9);
+  tableLease.release();
+});
+
+test("diagram edit denial blocks table claims and loss is not retried", async () => {
+  const { session, transport } = await connectSession();
+  const beginPromise = session.beginDiagramEdit();
+  await tick();
+  const acquire = transport.sent.find(
+    (message) => message.type === "diagram_lock_acquire",
+  );
+  transport.receive({
+    type: "diagram_lock_denied",
+    diagramId: "diagram-1",
+    requestId: acquire.requestId,
+    lock: {
+      diagramId: "diagram-1",
+      clientId: "client-b",
+      displayName: "B",
+      token: 7,
+      expiresAt: 999,
+    },
+  });
+  assert.deepEqual(await beginPromise, {
+    ok: false,
+    reason: "held",
+    blockedBy: "B",
+  });
+  assert.equal(session.getState().diagramPhase, "blocked");
+
+  const tableAcquires = transport.sent.filter(
+    (message) => message.type === "table_lock_acquire",
+  ).length;
+  const lease = session.claim(["table-1"]);
+  assert.equal(
+    transport.sent.filter((message) => message.type === "table_lock_acquire")
+      .length,
+    tableAcquires,
+  );
+  lease.release();
+
+  transport.receive({
+    type: "diagram_lock_state",
+    diagramId: "diagram-1",
+    lock: null,
+  });
+  assert.equal(session.getState().diagramPhase, "idle");
+
+  const beginAgain = session.beginDiagramEdit();
+  await tick();
+  const secondAcquire = transport.sent
+    .filter((message) => message.type === "diagram_lock_acquire")
+    .at(-1);
+  transport.receive({
+    type: "diagram_lock_granted",
+    diagramId: "diagram-1",
+    requestId: secondAcquire.requestId,
+    version: 1,
+    lock: {
+      diagramId: "diagram-1",
+      clientId: identity.clientId,
+      token: 8,
+      expiresAt: 999,
+    },
+  });
+  await beginAgain;
+
+  const acquireCount = transport.sent.filter(
+    (message) => message.type === "diagram_lock_acquire",
+  ).length;
+  transport.receive({
+    type: "diagram_lock_state",
+    diagramId: "diagram-1",
+    lock: null,
+  });
+  assert.equal(session.getState().diagramPhase, "lost");
+  assert.equal(
+    transport.sent.filter((message) => message.type === "diagram_lock_acquire")
+      .length,
+    acquireCount,
+  );
 });
 
 test("a resync keeps the server snapshot and marks the save as conflict", async () => {

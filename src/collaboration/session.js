@@ -9,6 +9,9 @@ const INITIAL_STATE = {
   tableLocks: {},
   ownTableLocks: {},
   pendingTables: {},
+  diagramLock: null,
+  diagramBlockedBy: null,
+  diagramPhase: "idle",
   save: { state: "idle", at: null },
 };
 
@@ -34,6 +37,7 @@ export function createCollabSession({
   let renewTimer = null;
   let saveTimer = null;
   let savePromise = null;
+  let pendingDiagram = null;
   const listeners = new Set();
   const pendingSaves = new Map();
   const previewThrottle = new Map();
@@ -119,6 +123,7 @@ export function createCollabSession({
     if (
       !session ||
       !joined ||
+      state.diagramLock ||
       pendingByTable.has(tableId) ||
       held.has(tableId)
     ) {
@@ -142,6 +147,32 @@ export function createCollabSession({
       resolveLeases();
     }, LOCK_TIMEOUT_MS);
     emitOwnLocks();
+  };
+
+  const requestDesiredTables = () => {
+    if (state.diagramLock) return;
+    for (const tableId of desired.keys()) requestTable(tableId);
+  };
+
+  const releaseAllTableLocks = () => {
+    for (const tableId of [...held.keys()]) releaseHeldTable(tableId);
+  };
+
+  const releaseDiagramLock = () => {
+    const lock = state.diagramLock;
+    if (lock && lock.clientId === identity.clientId && joined) {
+      send({
+        type: MESSAGE_TYPES.DIAGRAM_LOCK_RELEASE,
+        diagramId: session.diagramId,
+        token: lock.token,
+      });
+    }
+    emit({
+      diagramLock: null,
+      diagramBlockedBy: null,
+      diagramPhase: "idle",
+    });
+    requestDesiredTables();
   };
 
   const applySnapshot = (message, source) => {
@@ -334,6 +365,80 @@ export function createCollabSession({
     previewThrottle.set(tableId, current);
   };
 
+  const beginDiagramEdit = async () => {
+    if (!session || !joined) return { ok: false, reason: "offline" };
+    if (state.diagramPhase === "editing") {
+      return { ok: true, lock: state.diagramLock };
+    }
+    if (state.diagramPhase === "requesting") {
+      return { ok: false, reason: "requesting" };
+    }
+
+    await saveNow();
+    if (["error", "conflict"].includes(state.save.state)) {
+      return { ok: false, reason: "save-failed" };
+    }
+
+    releaseAllTableLocks();
+    emit({ diagramPhase: "requesting" });
+    const requestId = nanoid();
+    return new Promise((resolve) => {
+      const timer = clock.setTimeout(() => {
+        if (pendingDiagram?.requestId !== requestId) return;
+        pendingDiagram = null;
+        emit({ diagramPhase: "idle" });
+        resolve({ ok: false, reason: "timeout" });
+      }, LOCK_TIMEOUT_MS);
+      pendingDiagram = { requestId, resolve, timer };
+      send({
+        type: MESSAGE_TYPES.DIAGRAM_LOCK_ACQUIRE,
+        diagramId: session.diagramId,
+        requestId,
+      });
+    });
+  };
+
+  const cancelDiagramEdit = () => {
+    if (pendingDiagram) {
+      clock.clearTimeout(pendingDiagram.timer);
+      pendingDiagram.resolve({ ok: false, reason: "cancelled" });
+      pendingDiagram = null;
+    }
+    if (state.diagramPhase === "editing") {
+      releaseDiagramLock();
+    } else {
+      emit({
+        diagramBlockedBy: null,
+        diagramPhase: state.diagramLock ? "blocked" : "idle",
+      });
+    }
+  };
+
+  const commitDiagramEdit = async (snapshot) => {
+    if (
+      state.diagramPhase !== "editing" ||
+      state.diagramLock?.clientId !== identity.clientId
+    ) {
+      return { ok: false, reason: "not-editing" };
+    }
+    try {
+      await sendSnapshot(snapshot);
+      session.lastApplied = {
+        name: snapshot.name,
+        document: snapshot.document,
+      };
+      const version = state.version;
+      releaseDiagramLock();
+      return { ok: true, version };
+    } catch (error) {
+      return {
+        ok: false,
+        reason: state.save.state === "conflict" ? "conflict" : "error",
+        message: error.message,
+      };
+    }
+  };
+
   const handleLockState = (message) => {
     const nextLocks = Object.fromEntries(
       (message.locks || []).map((lock) => [lock.tableId, lock]),
@@ -457,7 +562,7 @@ export function createCollabSession({
       emit({
         tableLocks: { ...state.tableLocks, [tableId]: message.lock },
       });
-      if ((desired.get(tableId) ?? 0) === 0) {
+      if (state.diagramLock || (desired.get(tableId) ?? 0) === 0) {
         releaseHeldTable(tableId);
       } else {
         emitOwnLocks();
@@ -474,6 +579,91 @@ export function createCollabSession({
       blocked.set(tableId, message.lock ?? null);
       emitOwnLocks();
       resolveLeases();
+      return;
+    }
+
+    if (message.type === MESSAGE_TYPES.DIAGRAM_LOCK_STATE) {
+      const lock = message.lock;
+      if (!lock) {
+        if (state.diagramPhase === "editing") {
+          emit({
+            diagramLock: null,
+            diagramBlockedBy: null,
+            diagramPhase: "lost",
+          });
+        } else if (state.diagramPhase !== "requesting") {
+          emit({
+            diagramLock: null,
+            diagramBlockedBy: null,
+            diagramPhase: "idle",
+          });
+        }
+        requestDesiredTables();
+      } else if (lock.clientId === identity.clientId) {
+        emit({
+          diagramLock: lock,
+          diagramBlockedBy: null,
+          diagramPhase:
+            state.diagramPhase === "requesting" ? "requesting" : "editing",
+        });
+      } else {
+        emit({
+          diagramLock: lock,
+          diagramBlockedBy: null,
+          diagramPhase: state.diagramPhase === "editing" ? "lost" : "blocked",
+        });
+      }
+      return;
+    }
+
+    if (message.type === MESSAGE_TYPES.DIAGRAM_LOCK_GRANTED) {
+      if (pendingDiagram?.requestId !== message.requestId) {
+        if (message.lock?.clientId === identity.clientId && session && joined) {
+          send({
+            type: MESSAGE_TYPES.DIAGRAM_LOCK_RELEASE,
+            diagramId: session.diagramId,
+            token: message.lock.token,
+          });
+        }
+        return;
+      }
+      clock.clearTimeout(pendingDiagram.timer);
+      const { resolve } = pendingDiagram;
+      pendingDiagram = null;
+      const stale =
+        Number.isInteger(message.version) && message.version !== state.version;
+      emit({
+        diagramLock: message.lock,
+        diagramBlockedBy: null,
+        diagramPhase: "editing",
+      });
+      resolve({
+        ok: true,
+        lock: message.lock,
+        version: message.version,
+        stale,
+      });
+      return;
+    }
+
+    if (message.type === MESSAGE_TYPES.DIAGRAM_LOCK_DENIED) {
+      if (pendingDiagram?.requestId !== message.requestId) return;
+      clock.clearTimeout(pendingDiagram.timer);
+      const { resolve } = pendingDiagram;
+      pendingDiagram = null;
+      emit({
+        diagramPhase: "blocked",
+        diagramBlockedBy: message.lock ?? message.tableLocks?.[0] ?? null,
+        ...(message.lock ? { diagramLock: message.lock } : {}),
+      });
+      resolve({
+        ok: false,
+        reason: message.tableLocks?.length ? "table-locked" : "held",
+        blockedBy:
+          message.lock?.displayName ??
+          message.tableLocks?.[0]?.displayName ??
+          null,
+      });
       return;
     }
 
@@ -501,6 +691,16 @@ export function createCollabSession({
             diagramId: session.diagramId,
             tableId,
             token: lock.token,
+          });
+        }
+        if (
+          state.diagramPhase === "editing" &&
+          state.diagramLock?.clientId === identity.clientId
+        ) {
+          send({
+            type: MESSAGE_TYPES.DIAGRAM_LOCK_RENEW,
+            diagramId: session.diagramId,
+            token: state.diagramLock.token,
           });
         }
       }
@@ -534,7 +734,13 @@ export function createCollabSession({
     const hadPendingSaves = pendingSaves.size > 0;
     rejectPendingSaves("Connection closed before the save was acknowledged");
     if (hadPendingSaves) saveState("offline");
-    emit({ connection: CONNECTION_STATE.CONNECTING });
+    emit({
+      connection: CONNECTION_STATE.CONNECTING,
+      diagramLock: null,
+      diagramBlockedBy: null,
+      diagramPhase:
+        state.diagramPhase === "editing" ? "lost" : state.diagramPhase,
+    });
     const delay = Math.min(1_000 * 2 ** reconnectAttempts, RECONNECT_MAX_MS);
     reconnectAttempts += 1;
     reconnectTimer = clock.setTimeout(() => {
@@ -658,6 +864,9 @@ export function createCollabSession({
     claim,
     scheduleSave,
     saveNow,
+    beginDiagramEdit,
+    cancelDiagramEdit,
+    commitDiagramEdit,
     sendCursor,
     previewTableMove,
     markSnapshotApplied(snapshot) {

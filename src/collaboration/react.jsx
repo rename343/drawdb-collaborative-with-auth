@@ -44,9 +44,13 @@ function tableView(session, state, tableIds) {
   const locks = tableIds
     .map((tableId) => state.tableLocks[tableId])
     .filter(Boolean);
+  const ownDiagramLock =
+    state.diagramLock?.clientId === session.identity.clientId;
   const holder =
-    locks.find((lock) => lock.clientId !== session.identity.clientId) ?? null;
+    locks.find((lock) => lock.clientId !== session.identity.clientId) ??
+    (state.diagramLock && !ownDiagramLock ? state.diagramLock : null);
   const allMine =
+    !state.diagramLock &&
     tableIds.length > 0 &&
     tableIds.every(
       (tableId) =>
@@ -58,7 +62,7 @@ function tableView(session, state, tableIds) {
       ? "offline"
       : allMine
         ? "held"
-        : holder
+        : holder || state.diagramLock
           ? "blocked"
           : pending
             ? "requesting"
@@ -112,6 +116,16 @@ export function useTableAction() {
         ) {
           return { ok: true, value: await action() };
         }
+        const diagramLock = session.getState().diagramLock;
+        if (diagramLock) {
+          return {
+            ok: false,
+            blockedBy:
+              diagramLock.clientId === session.identity.clientId
+                ? null
+                : diagramLock.displayName,
+          };
+        }
         const lease = session.claim(tableIds);
         let timeoutId;
         const result = await Promise.race([
@@ -134,6 +148,26 @@ export function useTableAction() {
     }),
     [session],
   );
+}
+
+export function useDiagramEdit() {
+  const session = useCollabSession();
+  const state = useCollabState();
+  const ownLock = state.diagramLock?.clientId === session.identity.clientId;
+  const holder =
+    state.diagramLock && !ownLock
+      ? state.diagramLock
+      : state.diagramBlockedBy ?? null;
+
+  return {
+    phase: state.diagramPhase,
+    isMine: state.diagramPhase === "editing" && ownLock,
+    holder,
+    guiDisabled: Boolean(state.diagramLock) || state.diagramPhase === "editing",
+    begin: session.beginDiagramEdit,
+    cancel: session.cancelDiagramEdit,
+    commit: session.commitDiagramEdit,
+  };
 }
 
 export function useCollabStatus() {
