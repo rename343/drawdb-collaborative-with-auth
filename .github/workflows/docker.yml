@@ -6,6 +6,7 @@ on:
     tags: ["*"]
   pull_request:
     branches: [production, main]
+  workflow_dispatch:
 
 concurrency:
   group: docker-image-${{ github.ref }}
