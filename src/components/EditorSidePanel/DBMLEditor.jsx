@@ -76,8 +76,14 @@ export default function DBMLEditor({ applyDBML }) {
       case "save-failed":
         return t("collaboration_dbml_save_failed");
       case "held":
-      case "table-locked":
-        return t("collaboration_dbml_lock_denied", { name: holderName });
+      case "table-locked": {
+        const blockedBy = result.blockedBy;
+        const name =
+          blockedBy?.displayName ??
+          blockedBy?.name ??
+          t("collaboration_participant");
+        return t("collaboration_dbml_lock_denied", { name });
+      }
       case "requesting":
         return t("collaboration_dbml_requesting");
       case "timeout":
@@ -129,7 +135,7 @@ export default function DBMLEditor({ applyDBML }) {
   };
 
   const applyDraft = async () => {
-    if (!editing || applying) return;
+    if (!editing || applying || !applyDBML) return;
     setError("");
     setApplying(true);
     try {

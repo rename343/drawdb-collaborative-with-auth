@@ -103,6 +103,8 @@ test("applies parsed DBML while preserving the surrounding document", () => {
 
   assert.notEqual(comments.id, "removed");
   assert.ok(comments.x > 520);
+  assert.equal(comments.locked, false);
+  assert.equal(comments.collapsed, false);
 
   const postRelationship = next.references.find(
     (relationship) => relationship.name.includes("posts_user_id_users"),

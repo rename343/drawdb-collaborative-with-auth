@@ -122,7 +122,10 @@ export function applyDBMLToDocument(parsed, current) {
             locked: existing.locked ?? false,
             collapsed: existing.collapsed ?? false,
           }
-        : {}),
+        : {
+            locked: false,
+            collapsed: false,
+          }),
     };
 
     if (!existing) newTables.push(table);

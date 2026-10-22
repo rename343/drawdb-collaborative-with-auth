@@ -221,14 +221,15 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
         return result;
       }
 
+      setUndoStack([]);
+      setRedoStack([]);
+
       // A newer remote snapshot may have landed while the acknowledgement was
       // in flight. In that case it already contains this Apply.
       if (session.getState().version === result.version) {
         setTables(document.tables);
         setRelationships(document.references);
         setEnums(document.enums);
-        setUndoStack([]);
-        setRedoStack([]);
       }
       return result;
     },
