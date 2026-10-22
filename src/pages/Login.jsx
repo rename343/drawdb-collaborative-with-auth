@@ -5,10 +5,9 @@ import { useTranslation } from "react-i18next";
 import icon from "../assets/icon_dark_64.png";
 import { authApi } from "../api/auth";
 import { AUTH_STATUS } from "../context/AuthContext";
-import { useAuth, useThemedPage } from "../hooks";
+import { useAuth } from "../hooks";
 
 export default function Login({ mode = "login" }) {
-  useThemedPage();
   const { t } = useTranslation();
   const navigate = useNavigate();
   const location = useLocation();

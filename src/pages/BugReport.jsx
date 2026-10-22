@@ -12,7 +12,7 @@ import { CLEAR_EDITOR_COMMAND } from "lexical";
 import { Link } from "react-router-dom";
 import { socials } from "../data/socials";
 import { send } from "../api/email";
-import { useThemedPage } from "../hooks";
+import { useSettings } from "../hooks";
 
 function Form({ theme }) {
   const [editor] = useLexicalComposerContext();
@@ -124,14 +124,13 @@ function Form({ theme }) {
 }
 
 export default function BugReport() {
-  const theme = localStorage.getItem("theme") || "light";
+  const { settings } = useSettings();
+  const theme = settings.mode;
 
   useEffect(() => {
     document.title = "Report a bug | drawDB";
     document.body.setAttribute("class", "theme");
   }, []);
-
-  useThemedPage();
 
   return (
     <>
@@ -243,7 +242,8 @@ export default function BugReport() {
         } my-1`}
       />
       <div className="text-center text-sm py-3">
-        &copy; {new Date().getFullYear()} <strong>drawDB</strong> - All rights reserved.
+        &copy; {new Date().getFullYear()} <strong>drawDB</strong> - All rights
+        reserved.
       </div>
     </>
   );

@@ -1,7 +1,6 @@
-import { useState, useEffect, useCallback, useRef, createContext } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { v4 as uuidv4 } from "uuid";
 import ControlPanel from "./EditorHeader/ControlPanel";
-import { Slot } from "../context/ExtensionsContext";
 import Canvas from "./EditorCanvas/Canvas";
 import CollaborationCursors from "./CollaborationCursors";
 import { CanvasContextProvider } from "../context/CanvasContext";
@@ -24,32 +23,21 @@ import {
   useCollab,
 } from "../hooks";
 import FloatingControls from "./FloatingControls";
-import { Button, Modal, Tag } from "@douyinfe/semi-ui";
-import { IconAlertTriangle } from "@douyinfe/semi-icons";
+import { Modal, Tag } from "@douyinfe/semi-ui";
 import { useTranslation } from "react-i18next";
 import { databases } from "../data/databases";
-import { isRtl } from "../i18n/utils/rtl";
+import { isRtl } from "../i18n/languages";
 import { useMatch, useParams } from "react-router-dom";
-
-export const IdContext = createContext({
-  gistId: "",
-  setGistId: () => {},
-  version: "",
-  setVersion: () => {},
-});
 
 const SIDEPANEL_MIN_WIDTH = 374;
 
 export default function WorkSpace({ forcedDiagramId } = {}) {
-  const [gistId, setGistId] = useState("");
-  const [version, setVersion] = useState("");
   const [title, setTitle] = useState("Untitled Diagram");
   const [resize, setResize] = useState(false);
   const [toolbarContainer, setToolbarContainer] = useState(null);
   const [width, setWidth] = useState(SIDEPANEL_MIN_WIDTH);
   const [lastSaved, setLastSaved] = useState("");
   const [showSelectDbModal, setShowSelectDbModal] = useState(false);
-  const [showRestoreModal, setShowRestoreModal] = useState(false);
   const [selectedDb, setSelectedDb] = useState("");
 
   const pendingNewIdRef = useRef(null);
@@ -213,7 +201,6 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
       setRedoStack([]);
       setTransform({ zoom: 1, pan: { x: 0, y: 0 } });
       setTitle("Untitled diagram");
-      setGistId("");
       setLayout((prev) => ({ ...prev, readOnly: false }));
     };
 
@@ -307,12 +294,6 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
     loadedDiagramId,
   ]);
 
-  const returnToCurrentDiagram = async () => {
-    await load();
-    setLayout((prev) => ({ ...prev, readOnly: false }));
-    setVersion(null);
-  };
-
   useEffect(() => {
     if (applyingRemoteRef.current) {
       applyingRemoteRef.current = false;
@@ -340,7 +321,6 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
     relationships?.length,
     transform.zoom,
     title,
-    gistId,
     setSaveState,
   ]);
 
@@ -368,15 +348,13 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
 
   return (
     <div className="h-full flex flex-col overflow-hidden theme">
-      <IdContext.Provider value={{ gistId, setGistId, version, setVersion }}>
-        <ControlPanel
-          title={title}
-          setTitle={setTitle}
-          lastSaved={lastSaved}
-          toolbarContainer={toolbarContainer}
-          applyDiagram={applyDiagramState}
-        />
-      </IdContext.Provider>
+      <ControlPanel
+        title={title}
+        setTitle={setTitle}
+        lastSaved={lastSaved}
+        toolbarContainer={toolbarContainer}
+        applyDiagram={applyDiagramState}
+      />
       <div
         className="flex h-full overflow-y-auto"
         onPointerUp={(e) => e.isPrimary && setResize(false)}
@@ -400,7 +378,6 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
             <Canvas saveState={saveState} setSaveState={setSaveState} />
             <CollaborationCursors />
           </CanvasContextProvider>
-          <Slot name="canvas-overlay" />
           {isDiagram && loadedDiagramId && (
             <div className="pointer-events-none absolute right-3 top-3 z-40 flex items-center gap-2 rounded-full border border-zinc-200 bg-white/90 px-3 py-1.5 text-xs text-zinc-800 shadow-sm dark:border-zinc-700 dark:bg-zinc-900/90 dark:text-zinc-100">
               <span
@@ -430,30 +407,12 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
               className="absolute bottom-4 left-1/2 -translate-x-1/2 z-20"
             />
           )}
-          {version && (
-            <div className="absolute right-8 top-2 space-x-2">
-              <Button
-                icon={<i className="fa-solid fa-rotate-right mt-0.5"></i>}
-                onClick={() => setShowRestoreModal(true)}
-              >
-                {t("restore_version")}
-              </Button>
-              <Button
-                type="tertiary"
-                onClick={returnToCurrentDiagram}
-                icon={<i className="bi bi-arrow-return-right mt-1"></i>}
-              >
-                {t("return_to_current")}
-              </Button>
-            </div>
-          )}
           {!(layout.sidebar || layout.toolbar || layout.header) && (
             <div className="fixed right-5 bottom-4">
               <FloatingControls />
             </div>
           )}
         </div>
-        <Slot name="right-panel" />
       </div>
       <Modal
         centered
@@ -503,27 +462,6 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
             </div>
           ))}
         </div>
-      </Modal>
-      <Modal
-        visible={showRestoreModal}
-        centered
-        closable
-        onCancel={() => setShowRestoreModal(false)}
-        title={
-          <span className="flex items-center gap-2">
-            <IconAlertTriangle className="text-amber-400" size="extra-large" />{" "}
-            {t("restore_version")}
-          </span>
-        }
-        okText={t("continue")}
-        cancelText={t("cancel")}
-        onOk={() => {
-          setLayout((prev) => ({ ...prev, readOnly: false }));
-          setShowRestoreModal(false);
-          setVersion(null);
-        }}
-      >
-        {t("restore_warning")}
       </Modal>
     </div>
   );

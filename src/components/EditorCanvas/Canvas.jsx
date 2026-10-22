@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import { Slot } from "../../context/ExtensionsContext";
 import {
   Action,
   Cardinality,
@@ -868,7 +867,6 @@ export default function Canvas() {
               className="pointer-events-none touch-none"
             />
           )}
-          <Slot name="svg-overlay" />
           {notes.map((n) => (
             <Note
               key={n.id}

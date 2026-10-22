@@ -2,7 +2,7 @@ import { Button } from "@douyinfe/semi-ui";
 import { IconPlus } from "@douyinfe/semi-icons";
 import Empty from "../Empty";
 import { useAreas, useLayout } from "../../../hooks";
-import SearchBar from "./SearchBar";
+import { SearchBar } from "../SearchBar";
 import AreaInfo from "./AreaDetails";
 import { useTranslation } from "react-i18next";
 
@@ -14,7 +14,10 @@ export default function AreasTab() {
   return (
     <div>
       <div className="flex gap-2">
-        <SearchBar />
+        <SearchBar
+          items={areas}
+          scrollId={(area) => `scroll_area_${area.id}`}
+        />
         <div>
           <Button
             icon={<IconPlus />}

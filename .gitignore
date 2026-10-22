@@ -2,6 +2,9 @@
 logs
 *.log
 codex-session-*.md
+
+# Local agent scratch space; issues live on GitHub
+.scratch/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
