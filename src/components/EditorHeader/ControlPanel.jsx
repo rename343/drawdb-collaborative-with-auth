@@ -65,8 +65,8 @@ import {
   useEnums,
   useFullscreen,
   useNavigateWithParams,
-  useCollab,
 } from "../../hooks";
+import { useTableAction } from "../../collaboration/react";
 import { enterFullscreen, exitFullscreen } from "../../utils/fullscreen";
 import { dataURItoBlob } from "../../utils/utils";
 import { IconAddArea, IconAddNote, IconAddTable } from "../../icons";
@@ -144,7 +144,7 @@ export default function ControlPanel({
   const { notes, setNotes, updateNote, addNote, deleteNote } = useNotes();
   const { areas, setAreas, updateArea, addArea, deleteArea } = useAreas();
   const { undoStack, redoStack, setUndoStack, setRedoStack } = useUndoRedo();
-  const { acquireTableLocks, releaseTableLocks } = useCollab();
+  const { run: runWithTableLocks } = useTableAction();
   const { selectedElement, setSelectedElement } = useSelect();
   const { transform, setTransform } = useTransform();
   const { t, i18n } = useTranslation();
@@ -653,43 +653,48 @@ export default function ControlPanel({
     if (layout.readOnly || tables.length === 0) return;
 
     const tableIds = tables.map((table) => table.id);
-    if (!(await acquireTableLocks(tableIds))) {
-      Toast.warning(t("collaboration_table_lock_unavailable"));
-      return;
-    }
+    const result = await runWithTableLocks(tableIds, () => {
+      const positions = layoutDiagramTables(type, tables, relationships, {
+        tableWidth: settings.tableWidth,
+        showComments: settings.showComments,
+      });
+      const moved = tables.filter((table) => {
+        const p = positions.get(table.id);
+        return p.x !== table.x || p.y !== table.y;
+      });
 
-    const positions = layoutDiagramTables(type, tables, relationships, {
-      tableWidth: settings.tableWidth,
-      showComments: settings.showComments,
+      if (moved.length > 0) {
+        moved.forEach((table) =>
+          updateTable(table.id, positions.get(table.id)),
+        );
+        setUndoStack((prev) => [
+          ...prev,
+          {
+            action: Action.MOVE,
+            bulk: true,
+            message: t("auto_arrange"),
+            elements: moved.map((table) => ({
+              id: table.id,
+              type: ObjectType.TABLE,
+              undo: { x: table.x, y: table.y },
+              redo: positions.get(table.id),
+            })),
+          },
+        ]);
+        setRedoStack([]);
+      }
+
+      fitContent(
+        tables.map((table) => ({ ...table, ...positions.get(table.id) })),
+      );
     });
-    const moved = tables.filter((table) => {
-      const p = positions.get(table.id);
-      return p.x !== table.x || p.y !== table.y;
-    });
-
-    if (moved.length > 0) {
-      moved.forEach((table) => updateTable(table.id, positions.get(table.id)));
-      setUndoStack((prev) => [
-        ...prev,
-        {
-          action: Action.MOVE,
-          bulk: true,
-          message: t("auto_arrange"),
-          elements: moved.map((table) => ({
-            id: table.id,
-            type: ObjectType.TABLE,
-            undo: { x: table.x, y: table.y },
-            redo: positions.get(table.id),
-          })),
-        },
-      ]);
-      setRedoStack([]);
+    if (!result.ok) {
+      Toast.warning(
+        result.blockedBy
+          ? t("collaboration_table_lock_denied", { name: result.blockedBy })
+          : t("collaboration_table_lock_unavailable"),
+      );
     }
-    window.setTimeout(() => releaseTableLocks(tableIds), 2_000);
-
-    fitContent(
-      tables.map((table) => ({ ...table, ...positions.get(table.id) })),
-    );
   };
   const edit = () => {
     if (selectedElement.element === ObjectType.TABLE) {

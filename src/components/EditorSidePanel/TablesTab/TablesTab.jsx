@@ -7,8 +7,11 @@ import {
   useSaveState,
   useLayout,
   useUndoRedo,
-  useCollab,
 } from "../../../hooks";
+import {
+  useTableAction,
+  useTableLockState,
+} from "../../../collaboration/react";
 import { Action, ObjectType, State } from "../../../data/constants";
 import { useTranslation } from "react-i18next";
 import { DragHandle } from "../../SortableList/DragHandle";
@@ -78,48 +81,33 @@ function TableListItem({ table }) {
   const { updateTable } = useDiagram();
   const { setUndoStack, setRedoStack } = useUndoRedo();
   const { t } = useTranslation();
-  const {
-    acquireTableLock,
-    connectionState,
-    hasTableLock,
-    isTableLockedByOther,
-    releaseTableLocks,
-    tableLocks,
-  } = useCollab();
-  const lockedByParticipant = isTableLockedByOther(table.id);
+  const lock = useTableLockState(table.id);
+  const { run } = useTableAction();
+  const lockedByParticipant = Boolean(lock.holder);
 
   const toggleTableVisibility = async (e) => {
     e.stopPropagation();
-    if (lockedByParticipant) {
-      return;
-    }
-    const alreadyOwned = hasTableLock(table.id);
-    if (
-      connectionState === "connected" &&
-      !(await acquireTableLock(table.id))
-    ) {
-      return;
-    }
-    setUndoStack((prev) => [
-      ...prev,
-      {
-        action: Action.EDIT,
-        element: ObjectType.TABLE,
-        component: "self",
-        tid: table.id,
-        undo: { hidden: table.hidden },
-        redo: { hidden: !table.hidden },
-        message: t("edit_table", {
-          tableName: table.name,
-          extra: "[hidden]",
-        }),
-      },
-    ]);
-    setRedoStack([]);
-    updateTable(table.id, { hidden: !table.hidden });
-    if (connectionState === "connected" && !alreadyOwned) {
-      window.setTimeout(() => releaseTableLocks([table.id]), 2_000);
-    }
+    if (lockedByParticipant) return;
+    const result = await run([table.id], () => {
+      setUndoStack((prev) => [
+        ...prev,
+        {
+          action: Action.EDIT,
+          element: ObjectType.TABLE,
+          component: "self",
+          tid: table.id,
+          undo: { hidden: table.hidden },
+          redo: { hidden: !table.hidden },
+          message: t("edit_table", {
+            tableName: table.name,
+            extra: "[hidden]",
+          }),
+        },
+      ]);
+      setRedoStack([]);
+      updateTable(table.id, { hidden: !table.hidden });
+    });
+    if (!result.ok) return;
   };
 
   return (
@@ -146,7 +134,7 @@ function TableListItem({ table }) {
               title={
                 lockedByParticipant
                   ? t("collaboration_table_lock_denied", {
-                      name: tableLocks[table.id]?.displayName,
+                      name: lock.holder?.displayName,
                     })
                   : undefined
               }

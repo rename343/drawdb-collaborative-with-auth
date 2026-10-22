@@ -1,6 +1,7 @@
-import { createContext, useCallback, useState } from "react";
+import { createContext, useState } from "react";
 import { Action, DB, ObjectType, defaultBlue } from "../data/constants";
-import { useTransform, useUndoRedo, useSelect, useCollab } from "../hooks";
+import { useTransform, useUndoRedo, useSelect } from "../hooks";
+import { useCollabSession } from "../collaboration/react";
 import { Toast } from "@douyinfe/semi-ui";
 import { useTranslation } from "react-i18next";
 import { nanoid } from "nanoid";
@@ -16,25 +17,9 @@ export default function DiagramContextProvider({ children }) {
   const { transform } = useTransform();
   const { setUndoStack, setRedoStack } = useUndoRedo();
   const { selectedElement, setSelectedElement } = useSelect();
-  const { emitDelta, isApplyingRemoteRef, isTableLockedByOther, tableLocks } =
-    useCollab();
-
-  const shouldEmit = () => !isApplyingRemoteRef?.current;
-
-  const setDatabase = useCallback(
-    (next) => {
-      setDatabaseRaw(next);
-      if (!isApplyingRemoteRef?.current) {
-        emitDelta({
-          target: "database",
-          action: "update",
-          entityId: "database",
-          data: [next],
-        });
-      }
-    },
-    [emitDelta, isApplyingRemoteRef],
-  );
+  const session = useCollabSession();
+  const setDatabase = setDatabaseRaw;
+  const isTableLockedByOther = (id) => session.isTableLockedByOther(id);
 
   const addTable = (data, addToHistory = true) => {
     const id = nanoid();
@@ -86,22 +71,15 @@ export default function DiagramContextProvider({ children }) {
       ]);
       setRedoStack([]);
     }
-    if (shouldEmit()) {
-      const created = data?.table ?? newTable;
-      emitDelta({
-        target: "table",
-        action: "create",
-        entityId: created.id,
-        data: [created],
-      });
-    }
   };
 
   const deleteTable = (id, addToHistory = true) => {
-    if (shouldEmit() && isTableLockedByOther(id)) {
+    if (isTableLockedByOther(id)) {
       Toast.warning(
         t("collaboration_table_lock_denied", {
-          name: tableLocks[id]?.displayName ?? t("collaboration_participant"),
+          name:
+            session.getTableLock(id)?.displayName ??
+            t("collaboration_participant"),
         }),
       );
       return;
@@ -143,33 +121,17 @@ export default function DiagramContextProvider({ children }) {
         open: false,
       }));
     }
-    if (shouldEmit()) {
-      emitDelta({
-        target: "table",
-        action: "delete",
-        entityId: id,
-        data: [id],
-      });
-    }
   };
 
   const updateTable = (id, updatedValues) => {
-    if (shouldEmit() && isTableLockedByOther(id)) return;
+    if (isTableLockedByOther(id)) return;
     setTables((prev) =>
       prev.map((t) => (t.id === id ? { ...t, ...updatedValues } : t)),
     );
-    if (shouldEmit()) {
-      emitDelta({
-        target: "table",
-        action: "update",
-        entityId: id,
-        data: [id, updatedValues],
-      });
-    }
   };
 
   const updateField = (tid, fid, updatedValues) => {
-    if (shouldEmit() && isTableLockedByOther(tid)) return;
+    if (isTableLockedByOther(tid)) return;
     setTables((prev) =>
       prev.map((table) => {
         if (tid === table.id) {
@@ -183,21 +145,15 @@ export default function DiagramContextProvider({ children }) {
         return table;
       }),
     );
-    if (shouldEmit()) {
-      emitDelta({
-        target: "table",
-        action: "update",
-        entityId: tid,
-        data: [tid, fid, updatedValues],
-      });
-    }
   };
 
   const deleteField = (field, tid, addToHistory = true) => {
-    if (shouldEmit() && isTableLockedByOther(tid)) {
+    if (isTableLockedByOther(tid)) {
       Toast.warning(
         t("collaboration_table_lock_denied", {
-          name: tableLocks[tid]?.displayName ?? t("collaboration_participant"),
+          name:
+            session.getTableLock(tid)?.displayName ??
+            t("collaboration_participant"),
         }),
       );
       return;
@@ -267,15 +223,6 @@ export default function DiagramContextProvider({ children }) {
         return temp;
       });
     }
-    if (shouldEmit()) {
-      const created = data?.relationship ?? data;
-      emitDelta({
-        target: "relationship",
-        action: "create",
-        entityId: created.id,
-        data: [created],
-      });
-    }
   };
 
   const deleteRelationship = (id, addToHistory = true) => {
@@ -298,14 +245,6 @@ export default function DiagramContextProvider({ children }) {
       setRedoStack([]);
     }
     setRelationships((prev) => prev.filter((e) => e.id !== id));
-    if (shouldEmit()) {
-      emitDelta({
-        target: "relationship",
-        action: "delete",
-        entityId: id,
-        data: [id],
-      });
-    }
     if (
       selectedElement.element === ObjectType.RELATIONSHIP &&
       selectedElement.id === id
@@ -323,14 +262,6 @@ export default function DiagramContextProvider({ children }) {
     setRelationships((prev) =>
       prev.map((t) => (t.id === id ? { ...t, ...updatedValues } : t)),
     );
-    if (shouldEmit()) {
-      emitDelta({
-        target: "relationship",
-        action: "update",
-        entityId: id,
-        data: [id, updatedValues],
-      });
-    }
   };
 
   return (
