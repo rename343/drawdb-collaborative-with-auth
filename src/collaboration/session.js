@@ -15,7 +15,7 @@ const INITIAL_STATE = {
   save: { state: "idle", at: null },
 };
 
-const RELEASE_GRACE_MS = 2_000;
+const RELEASE_GRACE_MS = 500;
 const LOCK_TIMEOUT_MS = 5_000;
 const RENEW_EVERY_MS = 4_000;
 const RECONNECT_MAX_MS = 15_000;
@@ -423,6 +423,7 @@ export function createCollabSession({
         version: fresh.version,
         stale: false,
         refreshed: true,
+        snapshot: fresh,
       };
     } catch (error) {
       releaseDiagramLock();
@@ -463,14 +464,13 @@ export function createCollabSession({
     }
     if (savePromise) await savePromise;
     try {
-      await sendSnapshot(snapshot);
+      const acknowledgement = await sendSnapshot(snapshot);
       session.lastApplied = {
         name: snapshot.name,
         document: snapshot.document,
       };
-      const version = state.version;
       releaseDiagramLock();
-      return { ok: true, version };
+      return { ok: true, version: acknowledgement.version };
     } catch (error) {
       return {
         ok: false,
@@ -553,7 +553,7 @@ export function createCollabSession({
         emit({ version: message.version });
         session.lastApplied = pendingSave.snapshot;
         saveState("saved");
-        pendingSave.resolve();
+        pendingSave.resolve({ version: message.version });
       } else {
         emit({ version: message.version });
         if (message.clientId !== identity.clientId) {
@@ -895,7 +895,7 @@ export function createCollabSession({
       settled: false,
       resolve,
       whenSettled: () => promise,
-      release: () => releaseLease(lease),
+      release: (options) => releaseLease(lease, options),
     };
     leases.add(lease);
 
@@ -913,7 +913,7 @@ export function createCollabSession({
     return lease;
   };
 
-  function releaseLease(lease) {
+  function releaseLease(lease, { immediate = false } = {}) {
     if (!lease.active) return;
     lease.active = false;
     leases.delete(lease);
@@ -921,10 +921,19 @@ export function createCollabSession({
       const count = (desired.get(tableId) ?? 0) - 1;
       if (count > 0) {
         desired.set(tableId, count);
-      } else {
-        desired.delete(tableId);
-        scheduleGraceRelease(tableId);
+        continue;
       }
+      desired.delete(tableId);
+      if (!immediate) {
+        scheduleGraceRelease(tableId);
+        continue;
+      }
+      const graceTimer = graceTimers.get(tableId);
+      if (graceTimer !== undefined) {
+        clock.clearTimeout(graceTimer);
+        graceTimers.delete(tableId);
+      }
+      releaseHeldTable(tableId);
     }
   }
 

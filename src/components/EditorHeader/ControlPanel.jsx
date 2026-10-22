@@ -651,6 +651,9 @@ export default function ControlPanel({
   };
   const autoArrange = async (type) => {
     if (layout.readOnly || tables.length === 0) return;
+    if (selectedElement.element === ObjectType.TABLE) {
+      setSelectedElement((prev) => ({ ...prev, open: false }));
+    }
 
     const tableIds = tables.map((table) => table.id);
     const result = await runWithTableLocks(tableIds, () => {

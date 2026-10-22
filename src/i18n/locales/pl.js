@@ -106,6 +106,36 @@ const pl = {
     no_types: "Brak typów",
     no_types_text: "Twórz własne typy danych",
     no_issues: "Nie wykryto żadnych problemów.",
+    collaboration_dbml_edit: "Edytuj kod",
+    collaboration_dbml_apply: "Zastosuj",
+    collaboration_dbml_cancel: "Anuluj",
+    collaboration_dbml_preview: "Podgląd tylko do odczytu",
+    collaboration_dbml_editing: "Edycja DBML",
+    collaboration_dbml_owner:
+      "Edytujesz DBML — edycja GUI jest zablokowana",
+    collaboration_dbml_locked_by:
+      "{{name}} edytuje DBML — edycja GUI jest zablokowana",
+    collaboration_dbml_lock_denied:
+      "{{name}} edytuje. Nie udało się rozpocząć edycji DBML.",
+    collaboration_dbml_lock_lost:
+      "Utracono blokadę edycji DBML. Szkic został odrzucony; wejdź w tryb edycji ponownie.",
+    collaboration_dbml_lock_unavailable:
+      "Nie udało się uzyskać blokady edycji DBML.",
+    collaboration_dbml_offline:
+      "Połącz się z serwerem, aby edytować DBML.",
+    collaboration_dbml_save_failed:
+      "Nie udało się zapisać diagramu. Spróbuj ponownie przed edycją DBML.",
+    collaboration_dbml_requesting: "Uzyskiwanie dostępu do edycji DBML...",
+    collaboration_dbml_timeout:
+      "Przekroczono czas oczekiwania na blokadę edycji DBML. Spróbuj ponownie.",
+    collaboration_dbml_stale:
+      "Diagram zmienił się podczas uzyskiwania blokady. Spróbuj ponownie.",
+    collaboration_dbml_parse_error: "DBML zawiera błąd.",
+    collaboration_dbml_apply_failed: "Nie udało się zastosować DBML.",
+    collaboration_dbml_conflict:
+      "Diagram zmienił się podczas stosowania. Szkic został zachowany; anuluj i wejdź w tryb edycji ponownie.",
+    collaboration_dbml_applied: "Zastosowano DBML",
+    collaboration_dbml_read_only: "Ten diagram jest tylko do odczytu.",
     strict_mode_is_on_no_issues:
       "Tryb ścisły jest wyłączony, więc żadne problemy nie zostaną wyświetlone.",
     name: "Nazwa",

@@ -1,6 +1,6 @@
 import { Parser } from "@dbml/core";
 import { arrangeTables } from "../autoLayout/index.js";
-import { Cardinality, Constraint } from "../../data/constants";
+import { Cardinality, Constraint } from "../../data/constants.js";
 import { nanoid } from "nanoid";
 
 const parser = new Parser();

@@ -125,6 +125,13 @@ export default function DiagramContextProvider({ children }) {
 
   const updateTable = (id, updatedValues) => {
     if (isTableLockedByOther(id)) return;
+    if ("x" in updatedValues || "y" in updatedValues) {
+      setSelectedElement((prev) =>
+        prev.element === ObjectType.TABLE && prev.open
+          ? { ...prev, open: false }
+          : prev,
+      );
+    }
     setTables((prev) =>
       prev.map((t) => (t.id === id ? { ...t, ...updatedValues } : t)),
     );

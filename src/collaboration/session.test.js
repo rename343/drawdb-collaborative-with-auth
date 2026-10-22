@@ -238,14 +238,46 @@ test("Table locks are refcounted and release after a grace period", async () => 
   );
 
   first.release();
-  clock.advance(1_999);
+  clock.advance(499);
   assert.equal(
     transport.sent.filter((m) => m.type === "table_lock_release").length,
     0,
   );
 
   second.release();
-  clock.advance(2_000);
+  clock.advance(500);
+  assert.equal(
+    transport.sent.filter((m) => m.type === "table_lock_release").length,
+    1,
+  );
+  assert.equal(session.getState().tableLocks["table-1"], undefined);
+});
+
+test("a Table lock can be released immediately", async () => {
+  const { session, transport } = await connectSession();
+  const lease = session.claim(["table-1"]);
+  const acquire = transport.sent.find(
+    (message) => message.type === "table_lock_acquire",
+  );
+
+  transport.receive({
+    type: "table_lock_granted",
+    diagramId: "diagram-1",
+    requestId: acquire.requestId,
+    lock: {
+      tableId: "table-1",
+      diagramId: "diagram-1",
+      clientId: identity.clientId,
+      displayName: identity.displayName,
+      color: identity.color,
+      token: 1,
+      expiresAt: 100,
+    },
+  });
+  await lease.whenSettled();
+
+  lease.release({ immediate: true });
+
   assert.equal(
     transport.sent.filter((m) => m.type === "table_lock_release").length,
     1,

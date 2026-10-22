@@ -329,6 +329,34 @@ const en = {
     collaboration_table_lock_unavailable:
       "This table could not be locked for editing",
     collaboration_table_lock_pending: "Requesting edit access...",
+    collaboration_dbml_edit: "Edit code",
+    collaboration_dbml_apply: "Apply",
+    collaboration_dbml_cancel: "Cancel",
+    collaboration_dbml_preview: "Read-only preview",
+    collaboration_dbml_editing: "Editing DBML",
+    collaboration_dbml_owner: "You are editing DBML — GUI editing is locked",
+    collaboration_dbml_locked_by:
+      "{{name}} is editing DBML — GUI editing is locked",
+    collaboration_dbml_lock_denied:
+      "{{name}} is editing. Your DBML edit was not started.",
+    collaboration_dbml_lock_lost:
+      "The DBML edit lock was lost. Your draft was discarded; re-enter edit mode to continue.",
+    collaboration_dbml_lock_unavailable:
+      "The DBML edit lock could not be acquired.",
+    collaboration_dbml_offline: "Connect to the server before editing DBML.",
+    collaboration_dbml_save_failed:
+      "The diagram could not be saved. Try again before editing DBML.",
+    collaboration_dbml_requesting: "Requesting DBML edit access...",
+    collaboration_dbml_timeout:
+      "The DBML edit lock request timed out. Try again.",
+    collaboration_dbml_stale:
+      "The diagram changed while acquiring the lock. Try again.",
+    collaboration_dbml_parse_error: "The DBML contains an error.",
+    collaboration_dbml_apply_failed: "The DBML could not be applied.",
+    collaboration_dbml_conflict:
+      "The diagram changed while applying. Your draft was kept; cancel and re-enter edit mode.",
+    collaboration_dbml_applied: "DBML applied",
+    collaboration_dbml_read_only: "This diagram is read-only.",
     all_databases: "All databases",
     all_types: "All types",
     cloud: "Cloud",

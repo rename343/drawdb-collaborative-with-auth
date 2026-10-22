@@ -63,7 +63,10 @@ function tableView(session, state, tableIds) {
   };
 }
 
-export function useTableLocks(tableIds, { when = true } = {}) {
+export function useTableLocks(
+  tableIds,
+  { when = true, immediateRelease = false } = {},
+) {
   const session = useCollabSession();
   const state = useCollabState();
   const idsRef = useRef(tableIds);
@@ -73,14 +76,14 @@ export function useTableLocks(tableIds, { when = true } = {}) {
   useEffect(() => {
     if (!when || idsRef.current.length === 0) return undefined;
     const lease = session.claim(idsRef.current);
-    return () => lease.release();
-  }, [session, when, idsKey]);
+    return () => lease.release({ immediate: immediateRelease });
+  }, [immediateRelease, session, when, idsKey]);
 
   return tableView(session, state, tableIds);
 }
 
-export function useTableLock(tableId) {
-  return useTableLocks([tableId]);
+export function useTableLock(tableId, options) {
+  return useTableLocks([tableId], options);
 }
 
 export function useTableLockState(tableId) {
