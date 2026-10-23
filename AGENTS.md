@@ -10,6 +10,14 @@ issue and spec operations, read `docs/agents/issue-tracker.md`.
 Use the five canonical triage labels. When triaging, read
 `docs/agents/triage-labels.md`.
 
+### Project board
+
+Project board: read `docs/agents/project-board.md`.
+
+### Release
+
+Updating the production branch: read `docs/agents/release.md`.
+
 ### Domain docs
 
 Single-context: `GLOSSARY.md` and `docs/adr/`. Before exploring the domain, read
