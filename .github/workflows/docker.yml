@@ -24,20 +24,15 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm audit --omit=dev --audit-level=high
       - run: npm run check:server
       - run: npm run lint
       - run: npm run build
-      - run: npm run test:server
-      - run: npm run test:git
-      - run: npm run test:import
-      - run: npm run test:layout
-      - run: npm run test:share
-      - run: npm run test:collab
-      - run: npm run test:dbml
+      - run: npm test
       - run: bash -n deploy/*.sh
       - run: bash deploy/update-drawdb.test.sh
       - run: sudo env "PATH=$PATH" bash deploy/backup.test.sh
+      # Last, so a fresh advisory cannot hide test results.
+      - run: npm audit --omit=dev --audit-level=high
 
   docker:
     needs: validate
