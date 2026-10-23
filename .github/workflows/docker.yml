@@ -33,6 +33,8 @@ jobs:
       - run: npm run test:import
       - run: npm run test:layout
       - run: npm run test:share
+      - run: npm run test:collab
+      - run: npm run test:dbml
       - run: bash -n deploy/*.sh
       - run: bash deploy/update-drawdb.test.sh
       - run: sudo env "PATH=$PATH" bash deploy/backup.test.sh

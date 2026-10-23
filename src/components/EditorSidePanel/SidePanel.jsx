@@ -22,11 +22,11 @@ import NotesTab from "./NotesTab/NotesTab";
 import TablesTab from "./TablesTab/TablesTab";
 import { databases } from "../../data/databases";
 import EnumsTab from "./EnumsTab/EnumsTab";
-import { isRtl } from "../../i18n/utils/rtl";
+import { isRtl } from "../../i18n/languages";
 import i18n from "../../i18n/i18n";
 import DBMLEditor from "./DBMLEditor";
 
-export default function SidePanel({ width, resize, setResize }) {
+export default function SidePanel({ width, resize, setResize, applyDBML }) {
   const { layout, setLayout } = useLayout();
   const { settings } = useSettings();
   const { selectedElement, setSelectedElement } = useSelect();
@@ -101,7 +101,7 @@ export default function SidePanel({ width, resize, setResize }) {
       >
         <div className="h-full flex-1 overflow-y-auto">
           {layout.dbmlEditor ? (
-            <DBMLEditor />
+            <DBMLEditor applyDBML={applyDBML} />
           ) : (
             <Tabs
               type="card"

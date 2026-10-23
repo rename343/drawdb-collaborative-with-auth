@@ -1,6 +1,5 @@
-import { useContext, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { v4 as uuidv4 } from "uuid";
-import { Slot } from "../../context/ExtensionsContext";
 import { createPortal } from "react-dom";
 import {
   IconCaretdown,
@@ -66,8 +65,8 @@ import {
   useEnums,
   useFullscreen,
   useNavigateWithParams,
-  useCollab,
 } from "../../hooks";
+import { useTableAction } from "../../collaboration/react";
 import { enterFullscreen, exitFullscreen } from "../../utils/fullscreen";
 import { dataURItoBlob } from "../../utils/utils";
 import { IconAddArea, IconAddNote, IconAddTable } from "../../icons";
@@ -78,22 +77,21 @@ import { useTranslation } from "react-i18next";
 import { exportSQL } from "../../utils/exportSQL";
 import { databases } from "../../data/databases";
 import { jsonToMermaid } from "../../utils/exportAs/mermaid";
-import { isRtl } from "../../i18n/utils/rtl";
+import { isRtl } from "../../i18n/languages";
 import { jsonToDocumentation } from "../../utils/exportAs/documentation";
-import { IdContext } from "../Workspace";
 import { socials } from "../../data/socials";
 import { toDBML } from "../../utils/exportAs/dbml";
 import { exportSavedData } from "../../utils/exportSavedData";
 import { diagramApi } from "../../api/diagrams";
 import { nanoid } from "nanoid";
 import { getTableHeight } from "../../utils/utils";
-import { LayoutType } from "../../utils/autoLayout/index.js";
-import { layoutDiagramTables } from "../../utils/arrangeTables";
-import { deleteFromCache, STORAGE_KEY } from "../../utils/cache";
+import {
+  LayoutType,
+  layoutDiagramTables,
+} from "../../utils/autoLayout/index.js";
 import { DateTime } from "luxon";
 import ConfigureCustomTypes from "./ConfigureCustomTypes";
-import { useDiagramList } from "./Modal/Open/hooks/useDiagramList";
-import { mergeDiagrams, sortDiagrams } from "./Modal/Open/diagram";
+import { sortDiagrams, useDiagramList } from "./Modal/Open";
 import ShareButton from "./ShareButton";
 
 export default function ControlPanel({
@@ -146,11 +144,10 @@ export default function ControlPanel({
   const { notes, setNotes, updateNote, addNote, deleteNote } = useNotes();
   const { areas, setAreas, updateArea, addArea, deleteArea } = useAreas();
   const { undoStack, redoStack, setUndoStack, setRedoStack } = useUndoRedo();
-  const { acquireTableLocks, releaseTableLocks } = useCollab();
+  const { run: runWithTableLocks } = useTableAction();
   const { selectedElement, setSelectedElement } = useSelect();
   const { transform, setTransform } = useTransform();
   const { t, i18n } = useTranslation();
-  const { version, gistId, setGistId } = useContext(IdContext);
   const isTemplate = useMatch("/editor/templates/:id");
   const navigate = useNavigateWithParams();
 
@@ -654,45 +651,53 @@ export default function ControlPanel({
   };
   const autoArrange = async (type) => {
     if (layout.readOnly || tables.length === 0) return;
+    if (selectedElement.element === ObjectType.TABLE) {
+      setSelectedElement((prev) => ({ ...prev, open: false }));
+    }
 
     const tableIds = tables.map((table) => table.id);
-    if (!(await acquireTableLocks(tableIds))) {
-      Toast.warning(t("collaboration_table_lock_unavailable"));
-      return;
-    }
+    const result = await runWithTableLocks(tableIds, () => {
+      const positions = layoutDiagramTables(type, tables, relationships, {
+        tableWidth: settings.tableWidth,
+        showComments: settings.showComments,
+      });
+      const moved = tables.filter((table) => {
+        const p = positions.get(table.id);
+        return p.x !== table.x || p.y !== table.y;
+      });
 
-    const positions = layoutDiagramTables(type, tables, relationships, {
-      tableWidth: settings.tableWidth,
-      showComments: settings.showComments,
+      if (moved.length > 0) {
+        moved.forEach((table) =>
+          updateTable(table.id, positions.get(table.id)),
+        );
+        setUndoStack((prev) => [
+          ...prev,
+          {
+            action: Action.MOVE,
+            bulk: true,
+            message: t("auto_arrange"),
+            elements: moved.map((table) => ({
+              id: table.id,
+              type: ObjectType.TABLE,
+              undo: { x: table.x, y: table.y },
+              redo: positions.get(table.id),
+            })),
+          },
+        ]);
+        setRedoStack([]);
+      }
+
+      fitContent(
+        tables.map((table) => ({ ...table, ...positions.get(table.id) })),
+      );
     });
-    const moved = tables.filter((table) => {
-      const p = positions.get(table.id);
-      return p.x !== table.x || p.y !== table.y;
-    });
-
-    if (moved.length > 0) {
-      moved.forEach((table) => updateTable(table.id, positions.get(table.id)));
-      setUndoStack((prev) => [
-        ...prev,
-        {
-          action: Action.MOVE,
-          bulk: true,
-          message: t("auto_arrange"),
-          elements: moved.map((table) => ({
-            id: table.id,
-            type: ObjectType.TABLE,
-            undo: { x: table.x, y: table.y },
-            redo: positions.get(table.id),
-          })),
-        },
-      ]);
-      setRedoStack([]);
+    if (!result.ok) {
+      Toast.warning(
+        result.blockedBy
+          ? t("collaboration_table_lock_denied", { name: result.blockedBy })
+          : t("collaboration_table_lock_unavailable"),
+      );
     }
-    window.setTimeout(() => releaseTableLocks(tableIds), 2_000);
-
-    fitContent(
-      tables.map((table) => ({ ...table, ...positions.get(table.id) })),
-    );
   };
   const edit = () => {
     if (selectedElement.element === ObjectType.TABLE) {
@@ -878,9 +883,9 @@ export default function ControlPanel({
   const save = async () => {
     setSaveState(State.SAVING);
   };
-  const { cloud, local } = useDiagramList();
+  const { items: diagramList } = useDiagramList();
   const recentlyOpenedDiagrams = useMemo(() => {
-    const sorted = sortDiagrams(mergeDiagrams(cloud, local), {
+    const sorted = sortDiagrams(diagramList, {
       key: "lastModified",
       dir: "desc",
     });
@@ -893,7 +898,7 @@ export default function ControlPanel({
       if (recent.length === 10) break;
     }
     return recent;
-  }, [cloud, local]);
+  }, [diagramList]);
 
   const open = () => setModal(MODAL.OPEN);
   const saveDiagramAs = () => setModal(MODAL.SAVEAS);
@@ -904,8 +909,6 @@ export default function ControlPanel({
       diagramId: newId,
       database,
       name: newTitle,
-      gistId: "",
-      loadedFromGistId: "",
       lastModified: new Date(),
       tables,
       references: relationships,
@@ -1050,7 +1053,6 @@ export default function ControlPanel({
             setEnums([]);
             setUndoStack([]);
             setRedoStack([]);
-            setGistId("");
             navigate("/editor/templates/blank", { replace: true });
           } catch {
             Toast.error(t("oops_smth_went_wrong"));
@@ -1710,19 +1712,12 @@ export default function ControlPanel({
       export_saved_data: {
         function: exportSavedData,
       },
-      clear_cache: {
-        function: () => {
-          deleteFromCache(gistId);
-          Toast.success(t("cache_cleared"));
-        },
-      },
       flush_storage: {
         warning: {
           title: t("flush_storage"),
           message: t("are_you_sure_flush_storage"),
         },
         function: async () => {
-          localStorage.removeItem(STORAGE_KEY);
           db.delete()
             .then(() => {
               Toast.success(t("storage_flushed"));
@@ -1796,9 +1791,7 @@ export default function ControlPanel({
           >
             {header()}
             <div className="flex items-center gap-2 me-7">
-              <Slot name="header-actions-start" />
               <ShareButton diagramId={diagramId} isTemplate={isTemplate} />
-              <Slot name="header-actions-end" />
               <AdminButton />
               <UserMenu />
             </div>
@@ -2049,7 +2042,6 @@ export default function ControlPanel({
                   title={databases[database].name + " diagram"}
                 />
               )}
-              <Slot name="diagram-title-prefix" />
               <div
                 className="text-xl flex items-center gap-1 me-1"
                 onPointerEnter={(e) => e.isPrimary && setShowEditName(true)}
@@ -2066,11 +2058,6 @@ export default function ControlPanel({
                   /
                 </span>
                 <span>{title}</span>
-                {version && (
-                  <Tag className="mt-1" color="blue" size="small">
-                    {version.substring(0, 7)}
-                  </Tag>
-                )}
               </div>
               {(showEditName || modal === MODAL.RENAME) && !layout.readOnly && (
                 <IconEdit />

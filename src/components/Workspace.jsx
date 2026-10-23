@@ -1,7 +1,6 @@
-import { useState, useEffect, useCallback, useRef, createContext } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { v4 as uuidv4 } from "uuid";
 import ControlPanel from "./EditorHeader/ControlPanel";
-import { Slot } from "../context/ExtensionsContext";
 import Canvas from "./EditorCanvas/Canvas";
 import CollaborationCursors from "./CollaborationCursors";
 import { CanvasContextProvider } from "../context/CanvasContext";
@@ -21,41 +20,32 @@ import {
   useSaveState,
   useEnums,
   useNavigateWithParams,
-  useCollab,
 } from "../hooks";
+import { useCollabSession, useCollabState } from "../collaboration/react";
+import { snapshotsEqual } from "../collaboration/equal";
+import { applyDBMLToDocument } from "../utils/importFrom/dbmlApply";
 import FloatingControls from "./FloatingControls";
-import { Button, Modal, Tag } from "@douyinfe/semi-ui";
-import { IconAlertTriangle } from "@douyinfe/semi-icons";
+import { Modal, Tag } from "@douyinfe/semi-ui";
 import { useTranslation } from "react-i18next";
 import { databases } from "../data/databases";
-import { isRtl } from "../i18n/utils/rtl";
+import { isRtl } from "../i18n/languages";
 import { useMatch, useParams } from "react-router-dom";
-
-export const IdContext = createContext({
-  gistId: "",
-  setGistId: () => {},
-  version: "",
-  setVersion: () => {},
-});
 
 const SIDEPANEL_MIN_WIDTH = 374;
 
 export default function WorkSpace({ forcedDiagramId } = {}) {
-  const [gistId, setGistId] = useState("");
-  const [version, setVersion] = useState("");
   const [title, setTitle] = useState("Untitled Diagram");
   const [resize, setResize] = useState(false);
   const [toolbarContainer, setToolbarContainer] = useState(null);
   const [width, setWidth] = useState(SIDEPANEL_MIN_WIDTH);
   const [lastSaved, setLastSaved] = useState("");
   const [showSelectDbModal, setShowSelectDbModal] = useState(false);
-  const [showRestoreModal, setShowRestoreModal] = useState(false);
   const [selectedDb, setSelectedDb] = useState("");
 
   const pendingNewIdRef = useRef(null);
   const loadedIdRef = useRef(null);
   const saveTimerRef = useRef(null);
-  const applyingRemoteRef = useRef(false);
+  const documentPortRef = useRef(null);
   const { layout, setLayout } = useLayout();
   const { settings } = useSettings();
   const { types, setTypes } = useTypes();
@@ -73,14 +63,10 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
     setDatabase,
   } = useDiagram();
   const { undoStack, redoStack, setUndoStack, setRedoStack } = useUndoRedo();
-  const {
-    connect,
-    disconnect,
-    sendSnapshot,
-    connectionState,
-    participants,
-    versionRef,
-  } = useCollab();
+  const session = useCollabSession();
+  const collabState = useCollabState();
+  const connectionState = collabState.connection;
+  const participants = collabState.participants;
   const { t, i18n } = useTranslation();
   const { id: routeDiagramId } = useParams();
   const loadedDiagramId = forcedDiagramId ?? routeDiagramId;
@@ -90,6 +76,9 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
     ? true
     : Boolean(editorDiagramMatch || directDiagramMatch);
   const isTemplate = useMatch("/editor/templates/:id");
+  const isNewDiagram = Boolean(
+    isTemplate || !loadedDiagramId || loadedDiagramId === "blank",
+  );
 
   const navigate = useNavigateWithParams();
   const handleResize = (e) => {
@@ -114,17 +103,16 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
   );
 
   const applyDiagramState = useCallback(
-    (serverDiagram, { remote = false } = {}) => {
+    (serverDiagram, { remote = false, source } = {}) => {
+      const isRemote = remote || source === "remote";
       const diagram = serverDiagram.document ?? serverDiagram;
-      applyingRemoteRef.current = true;
-      versionRef.current = serverDiagram.version ?? versionRef.current;
       setDatabase(diagram.database || DB.GENERIC);
       setTitle(serverDiagram.name ?? diagram.name ?? "Untitled diagram");
       setTables(diagram.tables ?? []);
       setRelationships(diagram.references ?? diagram.relationships ?? []);
       setAreas(diagram.areas ?? diagram.subjectAreas ?? []);
       setNotes(diagram.notes ?? []);
-      if (!remote) {
+      if (!isRemote) {
         setTransform({
           pan: diagram.pan ?? { x: 0, y: 0 },
           zoom: diagram.zoom ?? 1,
@@ -132,7 +120,7 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
       }
       setTypes(diagram.types ?? []);
       setEnums(diagram.enums ?? []);
-      if (!remote) {
+      if (!isRemote) {
         setUndoStack([]);
         setRedoStack([]);
       }
@@ -148,35 +136,130 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
       setTransform,
       setTypes,
       setUndoStack,
-      versionRef,
+    ],
+  );
+
+  const applyPreview = useCallback(
+    (operation) => {
+      if (operation?.type !== "table.move") return;
+      const { id, x, y } = operation.payload;
+      setTables((current) =>
+        current.map((table) => (table.id === id ? { ...table, x, y } : table)),
+      );
+    },
+    [setTables],
+  );
+
+  documentPortRef.current = {
+    read: () => ({ name: title, document: buildDocument() }),
+    apply: applyDiagramState,
+    applyPreview,
+  };
+
+  const documentPort = useMemo(
+    () => ({
+      read: () => documentPortRef.current.read(),
+      apply: (snapshot, options) =>
+        documentPortRef.current.apply(snapshot, options),
+      applyPreview: (operation) =>
+        documentPortRef.current.applyPreview(operation),
+      equal: snapshotsEqual,
+    }),
+    [],
+  );
+
+  const writer = useMemo(
+    () => ({
+      async write({ name, document, baseVersion }) {
+        try {
+          const updated = await diagramApi.update(loadedDiagramId, {
+            name,
+            document,
+            baseVersion,
+          });
+          return { version: updated.version };
+        } catch (error) {
+          if (error.diagram) {
+            return {
+              conflict: true,
+              diagram: error.diagram,
+              version: error.diagram.version,
+            };
+          }
+          throw error;
+        }
+      },
+    }),
+    [loadedDiagramId],
+  );
+
+  const reader = useMemo(
+    () => ({
+      read: () => diagramApi.get(loadedDiagramId),
+    }),
+    [loadedDiagramId],
+  );
+
+  const applyExternalDiagram = useCallback(
+    (diagram, options) => {
+      applyDiagramState(diagram, options);
+      session.markSnapshotApplied(diagram);
+    },
+    [applyDiagramState, session],
+  );
+
+  const applyDBML = useCallback(
+    async (parsed) => {
+      const document = applyDBMLToDocument(parsed, buildDocument());
+      setSaveState(State.SAVING);
+      const result = await session.commitDiagramEdit({
+        name: title,
+        document,
+      });
+      if (!result.ok) {
+        setSaveState(State.ERROR);
+        return result;
+      }
+
+      setUndoStack([]);
+      setRedoStack([]);
+
+      // A newer remote snapshot may have landed while the acknowledgement was
+      // in flight. In that case it already contains this Apply.
+      if (session.getState().version === result.version) {
+        setTables(document.tables);
+        setRelationships(document.references);
+        setEnums(document.enums);
+      }
+      return result;
+    },
+    [
+      buildDocument,
+      session,
+      setEnums,
+      setRedoStack,
+      setRelationships,
+      setSaveState,
+      setTables,
+      setUndoStack,
+      title,
     ],
   );
 
   const save = useCallback(async () => {
-    const isNew = isTemplate || !loadedDiagramId || loadedDiagramId === "blank";
-    const targetId = isNew
-      ? (pendingNewIdRef.current ??= uuidv4())
-      : loadedDiagramId;
+    if (!isNewDiagram) {
+      await session.saveNow();
+      return;
+    }
+    const targetId = (pendingNewIdRef.current ??= uuidv4());
     try {
-      if (isNew) {
-        const created = await diagramApi.create({
-          id: targetId,
-          name: title,
-          document: buildDocument(),
-        });
-        versionRef.current = created.version;
-        pendingNewIdRef.current = null;
-        navigate(`/diagrams/${targetId}`, { replace: true });
-      } else if (connectionState === "connected") {
-        await sendSnapshot(title, buildDocument());
-      } else {
-        const updated = await diagramApi.update(targetId, {
-          name: title,
-          document: buildDocument(),
-          baseVersion: versionRef.current,
-        });
-        versionRef.current = updated.version;
-      }
+      await diagramApi.create({
+        id: targetId,
+        name: title,
+        document: buildDocument(),
+      });
+      pendingNewIdRef.current = null;
+      navigate(`/diagrams/${targetId}`, { replace: true });
       setSaveState(State.SAVED);
       setLastSaved(new Date().toLocaleString());
     } catch (error) {
@@ -188,13 +271,10 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
     buildDocument,
     title,
     setSaveState,
-    isTemplate,
-    loadedDiagramId,
+    isNewDiagram,
     navigate,
-    connectionState,
-    sendSnapshot,
-    versionRef,
     applyDiagramState,
+    session,
   ]);
 
   const load = useCallback(async () => {
@@ -202,7 +282,7 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
     loadedIdRef.current = loadedDiagramId ?? null;
 
     const resetEditorState = () => {
-      disconnect();
+      session.disconnect();
       setTables([]);
       setRelationships([]);
       setAreas([]);
@@ -213,31 +293,23 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
       setRedoStack([]);
       setTransform({ zoom: 1, pan: { x: 0, y: 0 } });
       setTitle("Untitled diagram");
-      setGistId("");
-      setLayout((prev) => ({ ...prev, readOnly: false }));
+      setLayout((prev) => ({ ...prev, localReadOnly: false }));
     };
 
     const loadDiagram = async (id) => {
       try {
         const diagram = await diagramApi.get(id);
-        setLayout((prev) => ({ ...prev, readOnly: false }));
+        setLayout((prev) => ({ ...prev, localReadOnly: false }));
         applyDiagramState(diagram);
-        connect({
+        session.connect({
           diagramId: id,
           version: diagram.version,
-          onSnapshot: (snapshot) => {
-            applyDiagramState(snapshot, { remote: true });
-            setSaveState(State.SAVED);
-            setLastSaved(new Date().toLocaleString());
-          },
-          onDelta: (operation) => {
-            if (operation?.type !== "table.move") return;
-            const { id: tableId, x, y } = operation.payload;
-            setTables((current) =>
-              current.map((table) =>
-                table.id === tableId ? { ...table, x, y } : table,
-              ),
-            );
+          document: documentPort,
+          writer,
+          reader,
+          initialSnapshot: {
+            name: diagram.name,
+            document: diagram.document ?? diagram,
           },
         });
       } catch (error) {
@@ -256,7 +328,7 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
         if (selectedDb === "") setShowSelectDbModal(true);
         return;
       }
-      disconnect();
+      session.disconnect();
       setDatabase(template.database || DB.GENERIC);
       setTitle(template.title);
       setTables(template.tables);
@@ -287,8 +359,10 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
     }
   }, [
     applyDiagramState,
-    connect,
-    disconnect,
+    session,
+    documentPort,
+    writer,
+    reader,
     setTransform,
     setRedoStack,
     setUndoStack,
@@ -307,17 +381,7 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
     loadedDiagramId,
   ]);
 
-  const returnToCurrentDiagram = async () => {
-    await load();
-    setLayout((prev) => ({ ...prev, readOnly: false }));
-    setVersion(null);
-  };
-
   useEffect(() => {
-    if (applyingRemoteRef.current) {
-      applyingRemoteRef.current = false;
-      return;
-    }
     if (
       tables?.length === 0 &&
       areas?.length === 0 &&
@@ -340,25 +404,33 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
     relationships?.length,
     transform.zoom,
     title,
-    gistId,
     setSaveState,
   ]);
 
   useEffect(() => {
-    // A remote snapshot may only change values that are intentionally absent
-    // from the autosave dependency list. Do not let its suppression flag leak
-    // into the user's next local edit in that case.
-    applyingRemoteRef.current = false;
-  });
-
-  useEffect(() => {
     if (layout.readOnly) return;
     if (saveState !== State.SAVING) return;
-    if (applyingRemoteRef.current) return;
-    window.clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = window.setTimeout(save, 600);
-    return () => window.clearTimeout(saveTimerRef.current);
-  }, [saveState, layout, save]);
+    if (isNewDiagram) {
+      window.clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = window.setTimeout(save, 600);
+      return () => window.clearTimeout(saveTimerRef.current);
+    }
+    session.scheduleSave();
+  }, [saveState, layout.readOnly, save, isNewDiagram, session]);
+
+  useEffect(() => {
+    const next = collabState.save.state;
+    if (next === "saving") {
+      setSaveState(State.SAVING);
+    } else if (next === "saved") {
+      setSaveState(State.SAVED);
+      setLastSaved(new Date().toLocaleString());
+    } else if (["conflict", "error", "offline"].includes(next)) {
+      setSaveState(State.ERROR);
+    }
+    // Depend on the whole object: a repeated "saved" acknowledgement still
+    // needs to clear a local SAVING state, e.g. after a DBML Apply.
+  }, [collabState.save, setSaveState]);
 
   useEffect(() => {
     document.title = "Editor | drawDB";
@@ -368,15 +440,13 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
 
   return (
     <div className="h-full flex flex-col overflow-hidden theme">
-      <IdContext.Provider value={{ gistId, setGistId, version, setVersion }}>
-        <ControlPanel
-          title={title}
-          setTitle={setTitle}
-          lastSaved={lastSaved}
-          toolbarContainer={toolbarContainer}
-          applyDiagram={applyDiagramState}
-        />
-      </IdContext.Provider>
+      <ControlPanel
+        title={title}
+        setTitle={setTitle}
+        lastSaved={lastSaved}
+        toolbarContainer={toolbarContainer}
+        applyDiagram={applyExternalDiagram}
+      />
       <div
         className="flex h-full overflow-y-auto"
         onPointerUp={(e) => e.isPrimary && setResize(false)}
@@ -393,14 +463,18 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
         style={isRtl(i18n.language) ? { direction: "rtl" } : {}}
       >
         {layout.sidebar && (
-          <SidePanel resize={resize} setResize={setResize} width={width} />
+          <SidePanel
+            resize={resize}
+            setResize={setResize}
+            width={width}
+            applyDBML={applyDBML}
+          />
         )}
         <div className="relative flex-1 min-w-0 h-full overflow-hidden">
           <CanvasContextProvider className="h-full w-full">
             <Canvas saveState={saveState} setSaveState={setSaveState} />
             <CollaborationCursors />
           </CanvasContextProvider>
-          <Slot name="canvas-overlay" />
           {isDiagram && loadedDiagramId && (
             <div className="pointer-events-none absolute right-3 top-3 z-40 flex items-center gap-2 rounded-full border border-zinc-200 bg-white/90 px-3 py-1.5 text-xs text-zinc-800 shadow-sm dark:border-zinc-700 dark:bg-zinc-900/90 dark:text-zinc-100">
               <span
@@ -430,30 +504,12 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
               className="absolute bottom-4 left-1/2 -translate-x-1/2 z-20"
             />
           )}
-          {version && (
-            <div className="absolute right-8 top-2 space-x-2">
-              <Button
-                icon={<i className="fa-solid fa-rotate-right mt-0.5"></i>}
-                onClick={() => setShowRestoreModal(true)}
-              >
-                {t("restore_version")}
-              </Button>
-              <Button
-                type="tertiary"
-                onClick={returnToCurrentDiagram}
-                icon={<i className="bi bi-arrow-return-right mt-1"></i>}
-              >
-                {t("return_to_current")}
-              </Button>
-            </div>
-          )}
           {!(layout.sidebar || layout.toolbar || layout.header) && (
             <div className="fixed right-5 bottom-4">
               <FloatingControls />
             </div>
           )}
         </div>
-        <Slot name="right-panel" />
       </div>
       <Modal
         centered
@@ -503,27 +559,6 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
             </div>
           ))}
         </div>
-      </Modal>
-      <Modal
-        visible={showRestoreModal}
-        centered
-        closable
-        onCancel={() => setShowRestoreModal(false)}
-        title={
-          <span className="flex items-center gap-2">
-            <IconAlertTriangle className="text-amber-400" size="extra-large" />{" "}
-            {t("restore_version")}
-          </span>
-        }
-        okText={t("continue")}
-        cancelText={t("cancel")}
-        onOk={() => {
-          setLayout((prev) => ({ ...prev, readOnly: false }));
-          setShowRestoreModal(false);
-          setVersion(null);
-        }}
-      >
-        {t("restore_warning")}
       </Modal>
     </div>
   );

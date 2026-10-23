@@ -1,24 +1,51 @@
 # Glossary
 
-Terms used in this repository. Claims about code are dated where relevant.
+Terms specific to this repository. Implementation details belong in code or
+ADRs, not here.
 
-- **Diagram edit lock** — a server-enforced, leased exclusive lock over one
-  diagram. Planned for DBML edit mode. See ADR 0002.
-- **Table lock** — a per-table advisory lock used by GUI editing. As of
-  2026-10-21 it is implemented in `server/tableLocks.js` and renewed every 4 s.
-- **DBML draft** — the local text in the DBML editor that has not yet been
-  applied to the diagram.
-- **Circle annotation** — a visual-only specialization circle labelled `d` or
-  `o`, with optional lines to table edges. It does not connect keys. See ADR
-  0001.
-- **Disjoint** — EER constraint rendered as `d`; an instance belongs to at most
-  one subtype. In this repository, visual only as of 2026-10-21.
-- **Overlapping** — EER constraint rendered as `o`; an instance may belong to
-  multiple subtypes. Visual only as of 2026-10-21.
-- **Total specialization** — EER completeness constraint rendered as a double
-  line from the supertype to the specialization circle. Visual only as of
-  2026-10-21.
-- **Partial specialization** — single line from supertype to circle.
-- **Snapshot** — the whole diagram document persisted by the server and
-  broadcast to collaborators.
-- **Worktree** — a separate checkout used to isolate a milestone branch.
+## Collaboration
+
+**Diagram edit lock**
+An exclusive claim over one diagram for the duration of a DBML edit. See ADR
+0002.
+_Avoid_: DBML lock
+
+**Table lock**
+An exclusive claim over one table while a participant edits it.
+_Avoid_: row lock, field lock
+
+**DBML draft**
+Text being edited in the DBML editor that has not yet been applied to the
+diagram.
+_Avoid_: DBML buffer, pending code
+
+**Snapshot**
+A complete diagram document at one version.
+_Avoid_: document, state
+
+## Circle annotations
+
+**Circle annotation**
+A visual-only specialization circle labelled `d` or `o`, with optional lines to
+table edges. It does not connect keys. See ADR 0001.
+_Avoid_: EER circle, subtype node
+
+**Disjoint**
+A specialization constraint where an instance belongs to at most one subtype;
+rendered as `d`.
+_Avoid_: exclusive
+
+**Overlapping**
+A specialization constraint where an instance may belong to multiple subtypes;
+rendered as `o`.
+_Avoid_: inclusive
+
+**Total specialization**
+A specialization completeness constraint where every supertype instance must
+belong to a subtype; rendered as a double line.
+_Avoid_: complete, mandatory
+
+**Partial specialization**
+A specialization completeness constraint where a supertype instance need not
+belong to a subtype; rendered as a single line.
+_Avoid_: optional

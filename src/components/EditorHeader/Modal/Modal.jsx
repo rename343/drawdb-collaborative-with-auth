@@ -1,4 +1,10 @@
-import { Image, Input, Modal as SemiUIModal, Spin } from "@douyinfe/semi-ui";
+import {
+  Image,
+  Input,
+  InputNumber,
+  Modal as SemiUIModal,
+  Spin,
+} from "@douyinfe/semi-ui";
 import { saveAs } from "file-saver";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -8,6 +14,7 @@ import {
   useAreas,
   useDiagram,
   useEnums,
+  useLayout,
   useNavigateWithParams,
   useNotes,
   useSettings,
@@ -15,22 +22,15 @@ import {
   useTypes,
   useUndoRedo,
 } from "../../../hooks";
-import { isRtl } from "../../../i18n/utils/rtl";
+import { isRtl } from "../../../i18n/languages";
+import { languages } from "../../../i18n/i18n";
 import { importSQL } from "../../../utils/importSQL";
 import { normalizeSQLForParser } from "../../../utils/importSQL/normalize";
-import {
-  getModalTitle,
-  getModalWidth,
-  getOkText,
-} from "../../../utils/modalData";
 import CodeEditor from "../../CodeEditor";
 import ImportDiagram from "./ImportDiagram";
 import ImportSource from "./ImportSource";
-import Language from "./Language";
 import New from "./New";
 import Open from "./Open";
-import Rename from "./Rename";
-import SetTableWidth from "./SetTableWidth";
 import { mergeCustomTypes } from "../../../utils/customTypes";
 
 const extensionToLanguage = {
@@ -60,6 +60,7 @@ export default function Modal({
   const { setTransform } = useTransform();
   const { setUndoStack, setRedoStack } = useUndoRedo();
   const { settings, setSettings } = useSettings();
+  const { layout } = useLayout();
   const [uncontrolledTitle, setUncontrolledTitle] = useState(title);
   const [uncontrolledLanguage, setUncontrolledLanguage] = useState(
     i18n.language,
@@ -264,7 +265,13 @@ export default function Modal({
         );
       case MODAL.RENAME:
         return (
-          <Rename key={title} title={title} setTitle={setUncontrolledTitle} />
+          <Input
+            key={title}
+            placeholder={t("name")}
+            defaultValue={title}
+            onChange={(v) => setUncontrolledTitle(v)}
+            readonly={layout.readOnly}
+          />
         );
       case MODAL.OPEN:
         return (
@@ -318,27 +325,111 @@ export default function Modal({
         }
       case MODAL.TABLE_WIDTH:
         return (
-          <SetTableWidth
-            tempWidth={tempTableWidth}
-            setTempWidth={setTempTableWidth}
+          <InputNumber
+            className="w-full"
+            value={tempTableWidth}
+            readonly={layout.readOnly}
+            onChange={(c) => {
+              if (c < 180) return;
+              setTempTableWidth(c);
+            }}
           />
         );
       case MODAL.LANGUAGE:
         return (
-          <Language
-            language={uncontrolledLanguage}
-            setLanguage={setUncontrolledLanguage}
-          />
+          <div className="grid grid-cols-4 md:grid-cols-2 gap-4">
+            {languages.map((l) => (
+              <button
+                key={l.code}
+                onClick={() => setUncontrolledLanguage(l.code)}
+                className={`space-y-1 py-3 px-4 rounded-md border-2 ${
+                  settings.mode === "dark"
+                    ? "bg-zinc-700 hover:bg-zinc-600"
+                    : "bg-zinc-100 hover:bg-zinc-200"
+                } ${
+                  uncontrolledLanguage === l.code
+                    ? "border-zinc-400"
+                    : "border-transparent"
+                }`}
+              >
+                <div className="flex justify-between items-center">
+                  <div className="font-semibold">{l.native_name}</div>
+                  <div className="opacity-60">{l.code}</div>
+                </div>
+                <div className="text-start">{l.name}</div>
+              </button>
+            ))}
+          </div>
         );
       default:
         return <></>;
     }
   };
 
+  const modalTitle = () => {
+    switch (modal) {
+      case MODAL.IMPORT:
+        return t("import_diagram");
+      case MODAL.IMPORT_SRC:
+        return t("import_from_source");
+      case MODAL.CODE:
+        return t("export");
+      case MODAL.IMG:
+        return t("export_image");
+      case MODAL.RENAME:
+        return t("rename_diagram");
+      case MODAL.OPEN:
+        return t("open_diagram");
+      case MODAL.SAVEAS:
+        return t("save_as");
+      case MODAL.NEW:
+        return t("create_new_diagram");
+      case MODAL.TABLE_WIDTH:
+        return t("table_width");
+      case MODAL.LANGUAGE:
+        return t("language");
+      default:
+        return "";
+    }
+  };
+
+  const modalWidth = () => {
+    switch (modal) {
+      case MODAL.LANGUAGE:
+      case MODAL.OPEN:
+      case MODAL.CODE:
+      case MODAL.NEW:
+        return 740;
+      default:
+        return 600;
+    }
+  };
+
+  const okText = () => {
+    switch (modal) {
+      case MODAL.IMPORT:
+      case MODAL.IMPORT_SRC:
+        return t("import");
+      case MODAL.CODE:
+      case MODAL.IMG:
+        return t("export");
+      case MODAL.RENAME:
+        return t("rename");
+      case MODAL.OPEN:
+        return t("open");
+      case MODAL.SAVEAS:
+        return t("save_as");
+      case MODAL.NEW:
+        return t("create");
+      default:
+        return t("confirm");
+    }
+  };
+
   return (
     <SemiUIModal
       style={isRtl(i18n.language) ? { direction: "rtl" } : {}}
-      title={getModalTitle(modal)}
+      title={modalTitle()}
       visible={modal !== MODAL.NONE && modal !== MODAL.CONFIG_CUSTOM_TYPES}
       onOk={getModalOnOk}
       afterClose={() => {
@@ -365,7 +456,7 @@ export default function Modal({
       }}
       centered
       closeOnEsc={true}
-      okText={getOkText(modal)}
+      okText={okText()}
       okButtonProps={{
         disabled:
           (error && error?.type === STATUS.ERROR) ||
@@ -378,7 +469,7 @@ export default function Modal({
       }}
       hasCancel
       cancelText={t("cancel")}
-      width={getModalWidth(modal)}
+      width={modalWidth()}
       bodyStyle={{
         maxHeight: window.innerHeight - 280,
         overflow:

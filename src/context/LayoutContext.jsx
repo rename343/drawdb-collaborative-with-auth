@@ -1,6 +1,7 @@
 import { createContext, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { queryConfig } from "../utils/queryConfig";
+import { useDiagramEdit } from "../collaboration/react";
 
 export const LayoutContext = createContext(null);
 
@@ -10,11 +11,12 @@ const defaultLayout = {
   issues: true,
   toolbar: true,
   dbmlEditor: false,
-  readOnly: false,
+  localReadOnly: false,
 };
 
 export default function LayoutContextProvider({ children }) {
   const [searchParams] = useSearchParams();
+  const { guiDisabled } = useDiagramEdit();
 
   const hideHeaderParam = searchParams.get(queryConfig.hideHeader.key);
   const hideSidebarParam = searchParams.get(queryConfig.hideSidebar.key);
@@ -35,6 +37,7 @@ export default function LayoutContextProvider({ children }) {
 
   const effectiveLayout = {
     ...layout,
+    readOnly: layout.localReadOnly || guiDisabled,
     header: queryConfig.hideHeader.isForced(hideHeaderParam)
       ? false
       : layout.header,

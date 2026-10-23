@@ -7,13 +7,16 @@ import {
   useSaveState,
   useLayout,
   useUndoRedo,
-  useCollab,
 } from "../../../hooks";
+import {
+  useTableAction,
+  useTableLockState,
+} from "../../../collaboration/react";
 import { Action, ObjectType, State } from "../../../data/constants";
 import { useTranslation } from "react-i18next";
 import { DragHandle } from "../../SortableList/DragHandle";
 import { SortableList } from "../../SortableList/SortableList";
-import SearchBar from "./SearchBar";
+import { TableSearchBar } from "../SearchBar";
 import Empty from "../Empty";
 import TableInfo from "./TableInfo";
 
@@ -27,7 +30,7 @@ export default function TablesTab() {
   return (
     <>
       <div className="flex gap-2">
-        <SearchBar tables={tables} />
+        <TableSearchBar tables={tables} />
         <div>
           <Button
             block
@@ -43,10 +46,12 @@ export default function TablesTab() {
         <Empty title={t("no_tables")} text={t("no_tables_text")} />
       ) : (
         <Collapse
+          // Semi UI ignores falsy activeKey values; an empty array is the
+          // explicit "nothing open" value and actually collapses the panel.
           activeKey={
             selectedElement.open && selectedElement.element === ObjectType.TABLE
               ? `${selectedElement.id}`
-              : ""
+              : []
           }
           keepDOM={false}
           lazyRender
@@ -64,7 +69,14 @@ export default function TablesTab() {
             keyPrefix="tables-tab"
             items={tables}
             onChange={(newTables) => setTables(newTables)}
-            afterChange={() => setSaveState(State.SAVING)}
+            afterChange={() => {
+              setSaveState(State.SAVING);
+              setSelectedElement((prev) =>
+                prev.element === ObjectType.TABLE && prev.open
+                  ? { ...prev, open: false }
+                  : prev,
+              );
+            }}
             renderItem={(item) => <TableListItem table={item} />}
           />
         </Collapse>
@@ -78,48 +90,33 @@ function TableListItem({ table }) {
   const { updateTable } = useDiagram();
   const { setUndoStack, setRedoStack } = useUndoRedo();
   const { t } = useTranslation();
-  const {
-    acquireTableLock,
-    connectionState,
-    hasTableLock,
-    isTableLockedByOther,
-    releaseTableLocks,
-    tableLocks,
-  } = useCollab();
-  const lockedByParticipant = isTableLockedByOther(table.id);
+  const lock = useTableLockState(table.id);
+  const { run } = useTableAction();
+  const lockedByParticipant = Boolean(lock.holder);
 
   const toggleTableVisibility = async (e) => {
     e.stopPropagation();
-    if (lockedByParticipant) {
-      return;
-    }
-    const alreadyOwned = hasTableLock(table.id);
-    if (
-      connectionState === "connected" &&
-      !(await acquireTableLock(table.id))
-    ) {
-      return;
-    }
-    setUndoStack((prev) => [
-      ...prev,
-      {
-        action: Action.EDIT,
-        element: ObjectType.TABLE,
-        component: "self",
-        tid: table.id,
-        undo: { hidden: table.hidden },
-        redo: { hidden: !table.hidden },
-        message: t("edit_table", {
-          tableName: table.name,
-          extra: "[hidden]",
-        }),
-      },
-    ]);
-    setRedoStack([]);
-    updateTable(table.id, { hidden: !table.hidden });
-    if (connectionState === "connected" && !alreadyOwned) {
-      window.setTimeout(() => releaseTableLocks([table.id]), 2_000);
-    }
+    if (lockedByParticipant) return;
+    const result = await run([table.id], () => {
+      setUndoStack((prev) => [
+        ...prev,
+        {
+          action: Action.EDIT,
+          element: ObjectType.TABLE,
+          component: "self",
+          tid: table.id,
+          undo: { hidden: table.hidden },
+          redo: { hidden: !table.hidden },
+          message: t("edit_table", {
+            tableName: table.name,
+            extra: "[hidden]",
+          }),
+        },
+      ]);
+      setRedoStack([]);
+      updateTable(table.id, { hidden: !table.hidden });
+    });
+    if (!result.ok) return;
   };
 
   return (
@@ -146,7 +143,7 @@ function TableListItem({ table }) {
               title={
                 lockedByParticipant
                   ? t("collaboration_table_lock_denied", {
-                      name: tableLocks[table.id]?.displayName,
+                      name: lock.holder?.displayName,
                     })
                   : undefined
               }

@@ -13,7 +13,7 @@ import {
   toGitError,
   withCredentials,
 } from "./git.js";
-import { DIAGRAM_ID_PATTERN, isPlainObject } from "./protocol.js";
+import { DIAGRAM_ID_PATTERN, isPlainObject } from "./validation.js";
 
 /* global process, Buffer */
 

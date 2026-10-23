@@ -7,7 +7,7 @@ import { Dropdown } from "@douyinfe/semi-ui";
 import { useFullscreen, useLayout } from "../../hooks";
 import { enterFullscreen, exitFullscreen } from "../../utils/fullscreen";
 import { useTranslation } from "react-i18next";
-import { isRtl } from "../../i18n/utils/rtl";
+import { isRtl } from "../../i18n/languages";
 import i18n from "../../i18n/i18n";
 
 export default function LayoutDropdown() {

@@ -1,25 +1,23 @@
 ## Agent skills
 
-### Working wiki
-
-Durable decisions, subsystem notes and workflow rules live in `docs/wiki/`.
-Read `docs/wiki/index.md` before long-running work and update it after each
-milestone.
-
 ### Issue tracker
 
-Local Markdown in `.scratch/`. For issue and spec operations, read `docs/agents/issue-tracker.md`.
-
-### Backlog
-
-Unscheduled items live in `.scratch/backlog/` with a `Status:` line. There is no
-root `TODO`: promote captured work into a ticket, and into a feature directory
-once a spec exists.
+GitHub Issues. `.scratch/` is ignored local scratch space, not a tracker. For
+issue and spec operations, read `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
-Use the five canonical triage statuses. When triaging, read `docs/agents/triage-labels.md`.
+Use the five canonical triage labels. When triaging, read
+`docs/agents/triage-labels.md`.
 
 ### Domain docs
 
-Single-context: `GLOSSARY.md` and `docs/adr/`. Before exploring the domain, read `docs/agents/domain.md`.
+Single-context: `GLOSSARY.md` and `docs/adr/`. Before exploring the domain, read
+`docs/agents/domain.md`.
+
+### Working agreements
+
+- Communicate with the repository owner in Polish.
+- Prefer incremental delivery; do not implement the whole roadmap at once.
+- Use git worktrees to isolate milestones, but merge sequentially because the
+  milestones share core files.

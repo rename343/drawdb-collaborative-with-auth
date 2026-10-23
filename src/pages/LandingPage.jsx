@@ -36,7 +36,6 @@ export default function LandingPage() {
         .then((res) => setStats(res.data));
     };
 
-    document.body.setAttribute("theme-mode", "light");
     document.title =
       "drawDB | Online database diagram editor and SQL generator";
 
