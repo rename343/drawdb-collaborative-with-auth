@@ -32,7 +32,7 @@
     "axios": "^1.16.0",
     "better-sqlite3": "^12.11.1",
     "dexie": "^3.2.4",
-    "dexie-react-hooks": "^1.1.7",
+    "dexie-react-hooks": "^4.4.0",
     "express": "^5.2.1",
     "file-saver": "^2.0.5",
     "framer-motion": "^10.18.0",
