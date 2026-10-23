@@ -12,7 +12,7 @@ Issues and specs for this repo live as GitHub issues. Use the `gh` CLI for all o
 - **Apply / remove labels**: `gh issue edit <number> --add-label "..."` / `--remove-label "..."`
 - **Close**: `gh issue close <number> --comment "..."`
 
-Infer the repo from `git remote -v`; `gh` does this automatically when run inside a clone.
+Infer the repo from `git remote -v`; `gh` does this automatically when run inside a clone. If `gh` cannot infer the repository (e.g. the remote is rewritten to `ssh://git@github-agent/...`), pass `--repo <owner>/<repo>` or set `GH_REPO`.
 
 `.scratch/` is untracked local scratch space (ignored by Git). Do not treat it as the issue tracker.
 
