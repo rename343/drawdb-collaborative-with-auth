@@ -51,6 +51,12 @@ function baseRef() {
   if (process.env.GITHUB_REF_TYPE === "tag" && refExists("HEAD^")) {
     return "HEAD^";
   }
+  if (
+    process.env.GITHUB_EVENT_NAME === "workflow_dispatch" &&
+    refExists("HEAD^")
+  ) {
+    return "HEAD^";
+  }
   if (refExists("origin/main")) return "origin/main";
   if (refExists("HEAD^")) return "HEAD^";
   return null;
