@@ -2,14 +2,13 @@ name: Build
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   pull_request:
-    branches: [ "main" ]
-    types: [ opened, synchronize, reopened, edited ]
+    branches: ["main"]
+    types: [opened, synchronize, reopened, edited]
 
 jobs:
   build:
-
     runs-on: ubuntu-latest
 
     strategy:
@@ -17,27 +16,51 @@ jobs:
         node-version: [20.x, 22.x]
 
     steps:
-    - uses: actions/checkout@v4
-    - name: Use Node.js ${{ matrix.node-version }}
-      uses: actions/setup-node@v4
-      with:
-        node-version: ${{ matrix.node-version }}
-        cache: 'npm'
-    - run: npm ci
-    - name: Check server syntax
-      run: npm run check:server
-    - name: Run eslint
-      run: npm run lint
-    - name: Run vite build
-      run: npm run build
-    - name: Run Node test suites
-      run: npm test
-    - name: Check deployment scripts
-      run: bash -n deploy/*.sh
-    - name: Run deployment update test
-      run: bash deploy/update-drawdb.test.sh
-    - name: Run deployment backup test
-      run: sudo env "PATH=$PATH" bash deploy/backup.test.sh
-    # Last, so a fresh advisory cannot hide test results.
-    - name: Audit production dependencies
-      run: npm audit --omit=dev --audit-level=high
+      - uses: actions/checkout@v4
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: "npm"
+      - run: npm ci
+      - name: Check server syntax
+        run: npm run check:server
+      - name: Run eslint
+        run: npm run lint
+      - name: Run vite build
+        run: npm run build
+      - name: Run Node test suites
+        run: npm test
+      - name: Check deployment scripts
+        run: bash -n deploy/*.sh
+      - name: Run deployment update test
+        run: bash deploy/update-drawdb.test.sh
+      - name: Run deployment backup test
+        run: sudo env "PATH=$PATH" bash deploy/backup.test.sh
+      # Last, so a fresh advisory cannot hide test results.
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+  static:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: "npm"
+      - run: npm ci
+      - name: Lint GitHub Actions workflows
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+        run: |
+          curl -fsSL "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" \
+            | tar -xz -C "$RUNNER_TEMP"
+          "$RUNNER_TEMP/actionlint" .github/workflows/*.yml
+      - name: Check formatting of changed files
+        run: npm run format:check

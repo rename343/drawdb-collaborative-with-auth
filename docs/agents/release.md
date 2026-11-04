@@ -15,9 +15,11 @@ Use non-destructive git commands throughout (`git merge --ff-only`,
 The repository has two CI tiers:
 
 - **Light** — the `Build` workflow. Runs on every pull request to `main` and
-  every push to `main`. It runs `check:server`, lint, the production build,
-  every Node test suite, the deployment script tests, and finally
-  `npm audit --omit=dev --audit-level=high`. It never publishes an image.
+  every push to `main`. It runs actionlint against the workflows, checks
+  formatting of changed files with Prettier, `check:server`, lint, the
+  production build, every Node test suite, the deployment script tests, and
+  finally `npm audit --omit=dev --audit-level=high`. It never publishes an
+  image.
 - **Heavy** — the `validate` job in the `Docker Build and Push` workflow. Runs
   on every pull request to `production`, on a pull request to `main` only when
   it carries the `ci:heavy` label, on manual `workflow_dispatch`, and on pushes
