@@ -6,6 +6,7 @@ on:
     tags: ["*"]
   pull_request:
     branches: [production, main]
+    types: [ opened, synchronize, reopened, edited, labeled, unlabeled ]
   workflow_dispatch:
 
 concurrency:
@@ -13,7 +14,15 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Heavy tier: everything from light CI, plus Playwright E2E once #44/#45
+  # land. A PR to main opts in with the ci:heavy label; PRs to production
+  # always run it. The docker job publishes only after this job passes.
   validate:
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.base.ref == 'production' ||
+      (github.event.pull_request.base.ref == 'main' &&
+      contains(github.event.pull_request.labels.*.name, 'ci:heavy'))
     runs-on: ubuntu-latest
     permissions:
       contents: read

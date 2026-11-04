@@ -9,6 +9,7 @@
     "dev:server": "node --watch server/index.js",
     "start": "node server/index.js",
     "check:server": "node scripts/check-server.mjs",
+    "check": "npm test && npm run lint && npm run build",
     "test": "npm run test:server && npm run test:git && npm run test:import && npm run test:collab && npm run test:dbml && npm run test:layout && npm run test:share",
     "test:server": "node --test server/server.test.js server/lockRegistry.test.js",
     "test:git": "node --test server/git.test.js",
