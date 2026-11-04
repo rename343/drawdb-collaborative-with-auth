@@ -6,7 +6,7 @@ on:
     tags: ["*"]
   pull_request:
     branches: [production, main]
-    types: [ opened, synchronize, reopened, edited, labeled, unlabeled ]
+    types: [opened, synchronize, reopened, edited, labeled, unlabeled]
   workflow_dispatch:
 
 concurrency:
