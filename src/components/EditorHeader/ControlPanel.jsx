@@ -67,6 +67,7 @@ import {
   useNavigateWithParams,
 } from "../../hooks";
 import { useTableAction } from "../../collaboration/react";
+import { tableLockDeniedMessage } from "../../collaboration/lockMessages";
 import { enterFullscreen, exitFullscreen } from "../../utils/fullscreen";
 import { dataURItoBlob } from "../../utils/utils";
 import { IconAddArea, IconAddNote, IconAddTable } from "../../icons";
@@ -692,11 +693,7 @@ export default function ControlPanel({
       );
     });
     if (!result.ok) {
-      Toast.warning(
-        result.blockedBy
-          ? t("collaboration_table_lock_denied", { name: result.blockedBy })
-          : t("collaboration_table_lock_unavailable"),
-      );
+      Toast.warning(tableLockDeniedMessage(t, result.blockedBy));
     }
   };
   const edit = () => {

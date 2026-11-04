@@ -27,6 +27,7 @@ import {
   useSaveState,
 } from "../../hooks";
 import { useCollabSession } from "../../collaboration/react";
+import { tableLockDeniedMessage } from "../../collaboration/lockMessages";
 import { useTranslation } from "react-i18next";
 import { useEventListener } from "usehooks-ts";
 import { areFieldsCompatible, getTableHeight } from "../../utils/utils";
@@ -466,11 +467,7 @@ export default function Canvas() {
           const clickedTableId = pointerDownElement.element.id;
           if (session.isTableLockedByOther(clickedTableId)) {
             const lock = session.getTableLock(clickedTableId);
-            Toast.warning(
-              t("collaboration_table_lock_denied", {
-                name: lock?.displayName ?? t("collaboration_participant"),
-              }),
-            );
+            Toast.warning(tableLockDeniedMessage(t, lock));
             handlePointerDownOnElement(e, {
               ...pointerDownElement,
               element: { ...pointerDownElement.element, locked: true },
@@ -500,13 +497,7 @@ export default function Canvas() {
             const result = await lease.whenSettled();
             if (!result.ok) {
               lease.release();
-              Toast.warning(
-                result.blockedBy
-                  ? t("collaboration_table_lock_denied", {
-                      name: result.blockedBy,
-                    })
-                  : t("collaboration_table_lock_unavailable"),
-              );
+              Toast.warning(tableLockDeniedMessage(t, result.blockedBy));
               return;
             }
             if (!pointerDownActiveRef.current) {

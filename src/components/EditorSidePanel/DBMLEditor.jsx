@@ -8,6 +8,7 @@ import {
   useSaveState,
 } from "../../hooks";
 import { useCollabStatus, useDiagramEdit } from "../../collaboration/react";
+import { lockHolderName } from "../../collaboration/lockMessages";
 import { toDBML } from "../../utils/exportAs/dbml";
 import { State } from "../../data/constants";
 import CodeEditor from "../CodeEditor";
@@ -64,10 +65,7 @@ export default function DBMLEditor({ applyDBML }) {
     }
   }, [isMine, phase, t]);
 
-  const holderName =
-    holder?.displayName ??
-    holder?.name ??
-    t("collaboration_participant");
+  const holderName = lockHolderName(holder, t("collaboration_participant"));
 
   const beginMessage = (result) => {
     switch (result.reason) {
@@ -77,11 +75,10 @@ export default function DBMLEditor({ applyDBML }) {
         return t("collaboration_dbml_save_failed");
       case "held":
       case "table-locked": {
-        const blockedBy = result.blockedBy;
-        const name =
-          blockedBy?.displayName ??
-          blockedBy?.name ??
-          t("collaboration_participant");
+        const name = lockHolderName(
+          result.blockedBy,
+          t("collaboration_participant"),
+        );
         return t("collaboration_dbml_lock_denied", { name });
       }
       case "requesting":

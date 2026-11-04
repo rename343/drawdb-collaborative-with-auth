@@ -6,6 +6,7 @@ import {
   useRef,
   useSyncExternalStore,
 } from "react";
+import { lockHolderName } from "./lockMessages.js";
 import { createCollabSession } from "./session.js";
 
 export const CollabContext = createContext(null);
@@ -111,7 +112,7 @@ export function useTableAction() {
             blockedBy:
               diagramLock.clientId === session.identity.clientId
                 ? null
-                : diagramLock.displayName,
+                : lockHolderName(diagramLock, null),
           };
         }
         const lease = session.claim(tableIds);
