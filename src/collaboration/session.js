@@ -465,7 +465,7 @@ export function createCollabSession({
     }
   };
 
-  const handleLockState = (message) => {
+  const handleTableLockState = (message) => {
     const nextLocks = Object.fromEntries(
       (message.locks || []).map((lock) => [lock.tableId, lock]),
     );
@@ -713,7 +713,7 @@ export function createCollabSession({
     [MESSAGE_TYPES.ERROR, handleError],
     [MESSAGE_TYPES.PRESENCE, handlePresence],
     [MESSAGE_TYPES.CURSOR, handleCursor],
-    [MESSAGE_TYPES.TABLE_LOCK_STATE, handleLockState],
+    [MESSAGE_TYPES.TABLE_LOCK_STATE, handleTableLockState],
     [MESSAGE_TYPES.TABLE_LOCK_GRANTED, handleTableLockGranted],
     [MESSAGE_TYPES.TABLE_LOCK_DENIED, handleTableLockDenied],
     [MESSAGE_TYPES.DIAGRAM_LOCK_STATE, handleDiagramLockState],

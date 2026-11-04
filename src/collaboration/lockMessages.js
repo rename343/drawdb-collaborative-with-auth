@@ -1,5 +1,5 @@
 export function lockHolderName(holder, fallback) {
-  if (typeof holder === "string") return holder || fallback;
+  if (typeof holder === "string") return holder;
   return holder?.displayName ?? holder?.name ?? fallback;
 }
 
