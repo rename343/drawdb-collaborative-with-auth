@@ -6,6 +6,7 @@ on:
     tags: ["*"]
   pull_request:
     branches: [production, main]
+    types: [opened, synchronize, reopened, edited, labeled, unlabeled]
   workflow_dispatch:
 
 concurrency:
@@ -13,17 +14,36 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Heavy tier: everything from light CI, plus Playwright E2E once #44/#45
+  # land. A PR to main opts in with the ci:heavy label; PRs to production
+  # always run it. The docker job publishes only after this job passes.
   validate:
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.base.ref == 'production' ||
+      (github.event.pull_request.base.ref == 'main' &&
+      contains(github.event.pull_request.labels.*.name, 'ci:heavy'))
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Lint GitHub Actions workflows
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+        run: |
+          curl -fsSL "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" \
+            | tar -xz -C "$RUNNER_TEMP"
+          "$RUNNER_TEMP/actionlint" .github/workflows/*.yml
+      - name: Check formatting of changed files
+        run: npm run format:check
       - run: npm run check:server
       - run: npm run lint
       - run: npm run build

@@ -16,7 +16,8 @@ Project board: read `docs/agents/project-board.md`.
 
 ### Release
 
-Updating the production branch: read `docs/agents/release.md`.
+Updating the production branch, the light/heavy CI split, the `ci:heavy`
+label, and the hotfix flow: read `docs/agents/release.md`.
 
 ### Domain docs
 
