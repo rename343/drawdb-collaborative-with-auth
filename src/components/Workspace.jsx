@@ -45,7 +45,6 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
   const pendingNewIdRef = useRef(null);
   const loadedIdRef = useRef(null);
   const saveTimerRef = useRef(null);
-  const documentPortRef = useRef(null);
   const { layout, setLayout } = useLayout();
   const { settings } = useSettings();
   const { types, setTypes } = useTypes();
@@ -150,23 +149,12 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
     [setTables],
   );
 
-  documentPortRef.current = {
-    read: () => ({ name: title, document: buildDocument() }),
-    apply: applyDiagramState,
-    applyPreview,
-  };
-
-  const documentPort = useMemo(
-    () => ({
-      read: () => documentPortRef.current.read(),
-      apply: (snapshot, options) =>
-        documentPortRef.current.apply(snapshot, options),
-      applyPreview: (operation) =>
-        documentPortRef.current.applyPreview(operation),
-      equal: snapshotsEqual,
-    }),
-    [],
-  );
+  // The session keeps this object across renders, so replace its methods in
+  // place to keep a stable identity with the latest document callbacks.
+  const documentPort = useRef({ equal: snapshotsEqual }).current;
+  documentPort.read = () => ({ name: title, document: buildDocument() });
+  documentPort.apply = applyDiagramState;
+  documentPort.applyPreview = applyPreview;
 
   const writer = useMemo(
     () => ({

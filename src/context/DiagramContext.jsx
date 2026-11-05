@@ -2,6 +2,7 @@ import { createContext, useState } from "react";
 import { Action, DB, ObjectType, defaultBlue } from "../data/constants";
 import { useTransform, useUndoRedo, useSelect } from "../hooks";
 import { useCollabSession } from "../collaboration/react";
+import { tableLockDeniedMessage } from "../collaboration/lockMessages";
 import { Toast } from "@douyinfe/semi-ui";
 import { useTranslation } from "react-i18next";
 import { nanoid } from "nanoid";
@@ -75,13 +76,7 @@ export default function DiagramContextProvider({ children }) {
 
   const deleteTable = (id, addToHistory = true) => {
     if (isTableLockedByOther(id)) {
-      Toast.warning(
-        t("collaboration_table_lock_denied", {
-          name:
-            session.getTableLock(id)?.displayName ??
-            t("collaboration_participant"),
-        }),
-      );
+      Toast.warning(tableLockDeniedMessage(t, session.getTableLock(id)));
       return;
     }
     if (addToHistory) {
@@ -156,13 +151,7 @@ export default function DiagramContextProvider({ children }) {
 
   const deleteField = (field, tid, addToHistory = true) => {
     if (isTableLockedByOther(tid)) {
-      Toast.warning(
-        t("collaboration_table_lock_denied", {
-          name:
-            session.getTableLock(tid)?.displayName ??
-            t("collaboration_participant"),
-        }),
-      );
+      Toast.warning(tableLockDeniedMessage(t, session.getTableLock(tid)));
       return;
     }
     const { fields, name } = tables.find((t) => t.id === tid);

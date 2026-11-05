@@ -1,4 +1,5 @@
 import { nanoid } from "nanoid";
+import { lockHolderName } from "./lockMessages.js";
 import { CONNECTION_STATE, MESSAGE_TYPES } from "./protocol.js";
 
 const INITIAL_STATE = {
@@ -7,8 +8,6 @@ const INITIAL_STATE = {
   participants: [],
   remoteCursors: {},
   tableLocks: {},
-  ownTableLocks: {},
-  pendingTables: {},
   diagramLock: null,
   diagramBlockedBy: null,
   diagramPhase: "idle",
@@ -61,17 +60,6 @@ export function createCollabSession({
     transport.send(JSON.stringify(message));
   };
 
-  const emitOwnLocks = () => {
-    emit({
-      ownTableLocks: Object.fromEntries(
-        [...held.keys()].map((tableId) => [tableId, true]),
-      ),
-      pendingTables: Object.fromEntries(
-        [...pendingByTable.keys()].map((tableId) => [tableId, true]),
-      ),
-    });
-  };
-
   const resolveLeases = () => {
     for (const lease of leases) {
       if (lease.settled) continue;
@@ -85,7 +73,7 @@ export function createCollabSession({
         lease.settled = true;
         lease.resolve({
           ok: false,
-          blockedBy: blocked.get(blockedTable)?.displayName ?? null,
+          blockedBy: lockHolderName(blocked.get(blockedTable), null),
         });
       }
     }
@@ -106,7 +94,6 @@ export function createCollabSession({
     const tableLocks = { ...state.tableLocks };
     delete tableLocks[tableId];
     emit({ tableLocks });
-    emitOwnLocks();
   };
 
   const scheduleGraceRelease = (tableId) => {
@@ -143,10 +130,8 @@ export function createCollabSession({
       pending.delete(requestId);
       pendingByTable.delete(tableId);
       blocked.set(tableId, null);
-      emitOwnLocks();
       resolveLeases();
     }, LOCK_TIMEOUT_MS);
-    emitOwnLocks();
   };
 
   const requestDesiredTables = () => {
@@ -480,7 +465,7 @@ export function createCollabSession({
     }
   };
 
-  const handleLockState = (message) => {
+  const handleTableLockState = (message) => {
     const nextLocks = Object.fromEntries(
       (message.locks || []).map((lock) => [lock.tableId, lock]),
     );
@@ -510,9 +495,232 @@ export function createCollabSession({
       }
     }
 
-    emitOwnLocks();
     resolveLeases();
   };
+
+  // Join and snapshot family.
+  const handleJoined = (message) => {
+    joined = true;
+    reconnectAttempts = 0;
+    emit({
+      version: message.version,
+      connection: CONNECTION_STATE.CONNECTED,
+    });
+    for (const tableId of desired.keys()) requestTable(tableId);
+  };
+
+  const handleSnapshot = (message) => {
+    applySnapshot(message, "remote");
+  };
+
+  const handleResyncRequired = (message) => {
+    applySnapshot(message, "remote");
+    rejectPendingSaves("The diagram changed while saving");
+    saveState("conflict");
+  };
+
+  // Save family.
+  const handleOperationApplied = (message) => {
+    const pendingSave = pendingSaves.get(message.operationId);
+    if (pendingSave) {
+      clock.clearTimeout(pendingSave.timer);
+      pendingSaves.delete(message.operationId);
+      emit({ version: message.version });
+      session.lastApplied = pendingSave.snapshot;
+      saveState("saved");
+      pendingSave.resolve({ version: message.version });
+    } else {
+      emit({ version: message.version });
+      if (message.clientId !== identity.clientId) {
+        applySnapshot(
+          {
+            name: message.operation.payload.name,
+            document: message.operation.payload.document,
+            version: message.version,
+          },
+          "remote",
+        );
+      }
+    }
+  };
+
+  const handleError = (message) => {
+    const pendingSave = message.operationId
+      ? pendingSaves.get(message.operationId)
+      : null;
+    if (pendingSave) {
+      clock.clearTimeout(pendingSave.timer);
+      pendingSaves.delete(message.operationId);
+      saveState("error", message.message || "Save rejected");
+      pendingSave.reject(new Error(message.message || "Save rejected"));
+    }
+  };
+
+  // Presence family.
+  const handlePresence = (message) => {
+    emit({ participants: message.participants || [] });
+  };
+
+  const handleCursor = (message) => {
+    emit({
+      remoteCursors: {
+        ...state.remoteCursors,
+        [message.clientId]: {
+          x: message.x,
+          y: message.y,
+          selected: message.selected,
+        },
+      },
+    });
+  };
+
+  // Table-lock family.
+  const handleTableLockGranted = (message) => {
+    const tableId = pending.get(message.requestId);
+    if (tableId === undefined) return;
+    pending.delete(message.requestId);
+    pendingByTable.delete(tableId);
+    held.set(tableId, message.lock);
+    blocked.delete(tableId);
+    emit({
+      tableLocks: { ...state.tableLocks, [tableId]: message.lock },
+    });
+    if (state.diagramLock || (desired.get(tableId) ?? 0) === 0) {
+      releaseHeldTable(tableId);
+    }
+    resolveLeases();
+  };
+
+  const handleTableLockDenied = (message) => {
+    const tableId = pending.get(message.requestId);
+    if (tableId === undefined) return;
+    pending.delete(message.requestId);
+    pendingByTable.delete(tableId);
+    blocked.set(tableId, message.lock ?? null);
+    resolveLeases();
+  };
+
+  // Diagram-lock family.
+  const handleDiagramLockState = (message) => {
+    const lock = message.lock;
+    if (!lock) {
+      if (state.diagramPhase === "editing") {
+        emit({
+          diagramLock: null,
+          diagramBlockedBy: null,
+          diagramPhase: "lost",
+        });
+      } else if (
+        state.diagramPhase !== "requesting" &&
+        state.diagramPhase !== "lost"
+      ) {
+        emit({
+          diagramLock: null,
+          diagramBlockedBy: null,
+          diagramPhase: "idle",
+        });
+      }
+      requestDesiredTables();
+    } else if (lock.clientId === identity.clientId) {
+      if (state.diagramPhase === "lost") {
+        if (joined) {
+          send({
+            type: MESSAGE_TYPES.DIAGRAM_LOCK_RELEASE,
+            diagramId: session.diagramId,
+            token: lock.token,
+          });
+        }
+        emit({
+          diagramLock: null,
+          diagramBlockedBy: null,
+          diagramPhase: "lost",
+        });
+      } else {
+        emit({
+          diagramLock: lock,
+          diagramBlockedBy: null,
+          diagramPhase:
+            state.diagramPhase === "requesting" ? "requesting" : "editing",
+        });
+      }
+    } else {
+      emit({
+        diagramLock: lock,
+        diagramBlockedBy: null,
+        diagramPhase: state.diagramPhase === "editing" ? "lost" : "blocked",
+      });
+    }
+  };
+
+  const handleDiagramLockGranted = (message) => {
+    if (pendingDiagram?.requestId !== message.requestId) {
+      if (message.lock?.clientId === identity.clientId && session && joined) {
+        send({
+          type: MESSAGE_TYPES.DIAGRAM_LOCK_RELEASE,
+          diagramId: session.diagramId,
+          token: message.lock.token,
+        });
+      }
+      return;
+    }
+    clock.clearTimeout(pendingDiagram.timer);
+    const { resolve } = pendingDiagram;
+    pendingDiagram = null;
+    const stale =
+      Number.isInteger(message.version) && message.version !== state.version;
+    emit({
+      diagramLock: message.lock,
+      diagramBlockedBy: null,
+      diagramPhase: "editing",
+    });
+    resolve({
+      ok: true,
+      lock: message.lock,
+      version: message.version,
+      stale,
+    });
+  };
+
+  const handleDiagramLockDenied = (message) => {
+    if (pendingDiagram?.requestId !== message.requestId) return;
+    clock.clearTimeout(pendingDiagram.timer);
+    const { resolve } = pendingDiagram;
+    pendingDiagram = null;
+    emit({
+      diagramPhase: "blocked",
+      diagramBlockedBy: message.lock ?? message.tableLocks?.[0] ?? null,
+      ...(message.lock ? { diagramLock: message.lock } : {}),
+    });
+    resolve({
+      ok: false,
+      reason: message.tableLocks?.length ? "table-locked" : "held",
+      blockedBy: message.lock ?? message.tableLocks?.[0] ?? null,
+    });
+  };
+
+  // Preview family.
+  const handleOperationPreview = (message) => {
+    if (message.clientId !== identity.clientId) {
+      session?.document.applyPreview?.(message.operation);
+    }
+  };
+
+  const messageHandlers = new Map([
+    [MESSAGE_TYPES.JOINED, handleJoined],
+    [MESSAGE_TYPES.SNAPSHOT, handleSnapshot],
+    [MESSAGE_TYPES.RESYNC_REQUIRED, handleResyncRequired],
+    [MESSAGE_TYPES.OPERATION_APPLIED, handleOperationApplied],
+    [MESSAGE_TYPES.ERROR, handleError],
+    [MESSAGE_TYPES.PRESENCE, handlePresence],
+    [MESSAGE_TYPES.CURSOR, handleCursor],
+    [MESSAGE_TYPES.TABLE_LOCK_STATE, handleTableLockState],
+    [MESSAGE_TYPES.TABLE_LOCK_GRANTED, handleTableLockGranted],
+    [MESSAGE_TYPES.TABLE_LOCK_DENIED, handleTableLockDenied],
+    [MESSAGE_TYPES.DIAGRAM_LOCK_STATE, handleDiagramLockState],
+    [MESSAGE_TYPES.DIAGRAM_LOCK_GRANTED, handleDiagramLockGranted],
+    [MESSAGE_TYPES.DIAGRAM_LOCK_DENIED, handleDiagramLockDenied],
+    [MESSAGE_TYPES.OPERATION_PREVIEW, handleOperationPreview],
+  ]);
 
   const handleMessage = (raw) => {
     let message;
@@ -521,228 +729,7 @@ export function createCollabSession({
     } catch {
       return;
     }
-
-    if (message.type === MESSAGE_TYPES.JOINED) {
-      joined = true;
-      reconnectAttempts = 0;
-      emit({
-        version: message.version,
-        connection: CONNECTION_STATE.CONNECTED,
-      });
-      for (const tableId of desired.keys()) requestTable(tableId);
-      return;
-    }
-
-    if (message.type === MESSAGE_TYPES.SNAPSHOT) {
-      applySnapshot(message, "remote");
-      return;
-    }
-
-    if (message.type === MESSAGE_TYPES.RESYNC_REQUIRED) {
-      applySnapshot(message, "remote");
-      rejectPendingSaves("The diagram changed while saving");
-      saveState("conflict");
-      return;
-    }
-
-    if (message.type === MESSAGE_TYPES.OPERATION_APPLIED) {
-      const pendingSave = pendingSaves.get(message.operationId);
-      if (pendingSave) {
-        clock.clearTimeout(pendingSave.timer);
-        pendingSaves.delete(message.operationId);
-        emit({ version: message.version });
-        session.lastApplied = pendingSave.snapshot;
-        saveState("saved");
-        pendingSave.resolve({ version: message.version });
-      } else {
-        emit({ version: message.version });
-        if (message.clientId !== identity.clientId) {
-          applySnapshot(
-            {
-              name: message.operation.payload.name,
-              document: message.operation.payload.document,
-              version: message.version,
-            },
-            "remote",
-          );
-        }
-      }
-      return;
-    }
-
-    if (message.type === MESSAGE_TYPES.ERROR) {
-      const pendingSave = message.operationId
-        ? pendingSaves.get(message.operationId)
-        : null;
-      if (pendingSave) {
-        clock.clearTimeout(pendingSave.timer);
-        pendingSaves.delete(message.operationId);
-        saveState("error", message.message || "Save rejected");
-        pendingSave.reject(new Error(message.message || "Save rejected"));
-      }
-      return;
-    }
-
-    if (message.type === MESSAGE_TYPES.PRESENCE) {
-      emit({ participants: message.participants || [] });
-      return;
-    }
-
-    if (message.type === MESSAGE_TYPES.TABLE_LOCK_STATE) {
-      handleLockState(message);
-      return;
-    }
-
-    if (message.type === MESSAGE_TYPES.TABLE_LOCK_GRANTED) {
-      const tableId = pending.get(message.requestId);
-      if (tableId === undefined) return;
-      pending.delete(message.requestId);
-      pendingByTable.delete(tableId);
-      held.set(tableId, message.lock);
-      blocked.delete(tableId);
-      emit({
-        tableLocks: { ...state.tableLocks, [tableId]: message.lock },
-      });
-      if (state.diagramLock || (desired.get(tableId) ?? 0) === 0) {
-        releaseHeldTable(tableId);
-      } else {
-        emitOwnLocks();
-      }
-      resolveLeases();
-      return;
-    }
-
-    if (message.type === MESSAGE_TYPES.TABLE_LOCK_DENIED) {
-      const tableId = pending.get(message.requestId);
-      if (tableId === undefined) return;
-      pending.delete(message.requestId);
-      pendingByTable.delete(tableId);
-      blocked.set(tableId, message.lock ?? null);
-      emitOwnLocks();
-      resolveLeases();
-      return;
-    }
-
-    if (message.type === MESSAGE_TYPES.DIAGRAM_LOCK_STATE) {
-      const lock = message.lock;
-      if (!lock) {
-        if (state.diagramPhase === "editing") {
-          emit({
-            diagramLock: null,
-            diagramBlockedBy: null,
-            diagramPhase: "lost",
-          });
-        } else if (
-          state.diagramPhase !== "requesting" &&
-          state.diagramPhase !== "lost"
-        ) {
-          emit({
-            diagramLock: null,
-            diagramBlockedBy: null,
-            diagramPhase: "idle",
-          });
-        }
-        requestDesiredTables();
-      } else if (lock.clientId === identity.clientId) {
-        if (state.diagramPhase === "lost") {
-          if (joined) {
-            send({
-              type: MESSAGE_TYPES.DIAGRAM_LOCK_RELEASE,
-              diagramId: session.diagramId,
-              token: lock.token,
-            });
-          }
-          emit({
-            diagramLock: null,
-            diagramBlockedBy: null,
-            diagramPhase: "lost",
-          });
-        } else {
-          emit({
-            diagramLock: lock,
-            diagramBlockedBy: null,
-            diagramPhase:
-              state.diagramPhase === "requesting" ? "requesting" : "editing",
-          });
-        }
-      } else {
-        emit({
-          diagramLock: lock,
-          diagramBlockedBy: null,
-          diagramPhase: state.diagramPhase === "editing" ? "lost" : "blocked",
-        });
-      }
-      return;
-    }
-
-    if (message.type === MESSAGE_TYPES.DIAGRAM_LOCK_GRANTED) {
-      if (pendingDiagram?.requestId !== message.requestId) {
-        if (message.lock?.clientId === identity.clientId && session && joined) {
-          send({
-            type: MESSAGE_TYPES.DIAGRAM_LOCK_RELEASE,
-            diagramId: session.diagramId,
-            token: message.lock.token,
-          });
-        }
-        return;
-      }
-      clock.clearTimeout(pendingDiagram.timer);
-      const { resolve } = pendingDiagram;
-      pendingDiagram = null;
-      const stale =
-        Number.isInteger(message.version) && message.version !== state.version;
-      emit({
-        diagramLock: message.lock,
-        diagramBlockedBy: null,
-        diagramPhase: "editing",
-      });
-      resolve({
-        ok: true,
-        lock: message.lock,
-        version: message.version,
-        stale,
-      });
-      return;
-    }
-
-    if (message.type === MESSAGE_TYPES.DIAGRAM_LOCK_DENIED) {
-      if (pendingDiagram?.requestId !== message.requestId) return;
-      clock.clearTimeout(pendingDiagram.timer);
-      const { resolve } = pendingDiagram;
-      pendingDiagram = null;
-      emit({
-        diagramPhase: "blocked",
-        diagramBlockedBy: message.lock ?? message.tableLocks?.[0] ?? null,
-        ...(message.lock ? { diagramLock: message.lock } : {}),
-      });
-      resolve({
-        ok: false,
-        reason: message.tableLocks?.length ? "table-locked" : "held",
-        blockedBy: message.lock ?? message.tableLocks?.[0] ?? null,
-      });
-      return;
-    }
-
-    if (
-      message.type === MESSAGE_TYPES.OPERATION_PREVIEW &&
-      message.clientId !== identity.clientId
-    ) {
-      session?.document.applyPreview?.(message.operation);
-      return;
-    }
-
-    if (message.type === MESSAGE_TYPES.CURSOR) {
-      emit({
-        remoteCursors: {
-          ...state.remoteCursors,
-          [message.clientId]: {
-            x: message.x,
-            y: message.y,
-            selected: message.selected,
-          },
-        },
-      });
-    }
+    messageHandlers.get(message.type)?.(message);
   };
 
   const scheduleRenew = () => {
@@ -784,7 +771,6 @@ export function createCollabSession({
     blocked.clear();
     for (const timer of graceTimers.values()) clock.clearTimeout(timer);
     graceTimers.clear();
-    emitOwnLocks();
   };
 
   const handleOpen = () => {

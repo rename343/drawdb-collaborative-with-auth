@@ -36,6 +36,7 @@ import {
   useUndoRedo,
 } from "../../hooks";
 import { useTableAction, useTableLockState } from "../../collaboration/react";
+import { tableLockDeniedMessage } from "../../collaboration/lockMessages";
 import TableInfo from "../EditorSidePanel/TablesTab/TableInfo";
 import { useTranslation } from "react-i18next";
 import { resolveType } from "../../utils/customTypes";
@@ -84,23 +85,12 @@ export default function Table({
 
   const runWithTableLock = async (action) => {
     if (lockedByParticipant) {
-      Toast.warning(
-        t("collaboration_table_lock_denied", {
-          name:
-            collaborationLock?.displayName ?? t("collaboration_participant"),
-        }),
-      );
+      Toast.warning(tableLockDeniedMessage(t, collaborationLock));
       return;
     }
     const result = await run([tableData.id], action);
     if (!result.ok) {
-      Toast.warning(
-        result.blockedBy
-          ? t("collaboration_table_lock_denied", {
-              name: result.blockedBy,
-            })
-          : t("collaboration_table_lock_unavailable"),
-      );
+      Toast.warning(tableLockDeniedMessage(t, result.blockedBy));
     }
   };
 
